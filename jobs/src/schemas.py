@@ -1,10 +1,13 @@
 """
 Pydantic schemas for PDF processing.
 """
+
 from enum import Enum
 from typing import List, Optional
 from uuid import UUID
+
 from pydantic import BaseModel, Field
+
 
 class ResponseCitation(BaseModel):
     """
@@ -28,6 +31,7 @@ class HighlightType(str, Enum):
     RESULT = "result"
     IMPACT = "impact"
 
+
 class AIHighlight(BaseModel):
     """
     Schema for a highlight in the paper.
@@ -48,6 +52,7 @@ class AIHighlight(BaseModel):
 
 class TitleAuthorsAbstract(BaseModel):
     """Schema for title, authors, and abstract extraction."""
+
     title: str = Field(description="Title of the paper **in normal case**")
     authors: List[str] = Field(default=[], description="List of authors")
     abstract: str = Field(default="", description="Abstract of the paper")
@@ -58,6 +63,7 @@ class TitleAuthorsAbstract(BaseModel):
 
 class InstitutionsKeywords(BaseModel):
     """Schema for institutions and keywords extraction."""
+
     institutions: List[str] = Field(
         default=[], description="List of institutions involved in the publication."
     )
@@ -76,80 +82,78 @@ class InstitutionsKeywords(BaseModel):
 
 class SummaryAndCitations(BaseModel):
     """Schema for summary and citations extraction."""
+
     summary_citations: List[ResponseCitation] = Field(
         description="List of citations supporting the summary. Include direct quotes or paraphrases with the citation index. The index should match the inline citations used in the summary. Only include citations that are directly relevant to the summary content. Use sequential numbering starting from 1."
     )
     summary: str = Field(
         description="""
-            Generate a concise summary of the research paper (< 200 words) that captures the essential contribution for readers with basic domain knowledge. Break each of the sections up for clarity. Separate sections with blank lines to ensure proper paragraph breaks in markdown. Do not use literal `\n` characters for line breaks. Do not use separate headings for each section.
+                Write a simple, easy-to-read summary of this research paper (< 200 words).
+                Your reader is a 1st-year Master's student who:
+                - Rarely reads research papers
+                - Is NOT a native English speaker
+                - Has basic knowledge of the field but not deep expertise
 
-            ## Structure:
-            Write 1-2 sentences on each section covering:
-            1. **Background**: What gap or question does this address?
-            2. **Methodology**: What methods, datasets, or techniques were used?
-            3. **Findings**: What were the main results? What are the implications? Include specific metrics when available.
+                ## Language rules (very important):
+                - Use SHORT sentences. One idea per sentence.
+                - Use SIMPLE everyday English words
+                - If you must use a technical term, explain it briefly in simple words
+                - Avoid: jargon, complex academic language, long sentences
+                - Imagine explaining this paper to a smart friend who knows nothing about this topic
 
-            ## Citation Requirements:
-            - Use inline citations [^1], [^2] to support factual claims, especially numerical results. The citation index should match the corresponding entry in the `summary_citations` field.
-            - Use sequential numbering starting from [^1]
+                ## Structure:
+                Write 1-2 short sentences for each:
+                1. **Background**: What problem did the researchers try to solve?
+                2. **Method**: What did they do? (simple explanation)
+                3. **Findings**: What did they find? (use simple numbers if available)
 
-            ## Quality Standards:
-            - Write in clear, accessible language while maintaining technical accuracy
-            - Focus on the paper's primary contribution—omit secondary findings
-            - Present findings objectively, including limitations when relevant
-            - If constrained for length, prioritize key results and implications
+                ## Citations:
+                - Use inline citations [^1], [^2] to support important claims
+                - Match the citation index to the `summary_citations` field
 
-            The goal is a focused, readable paragraph that gives someone a quick understanding of what the paper accomplishes.
-                    """,
+                The goal: someone who has NEVER read a paper before should understand this summary easily.
+                        """,
     )
 
 
 class Highlights(BaseModel):
     """Schema for highlights extraction."""
+
     highlights: List[AIHighlight] = Field(
         default=[],
         description="""
-Extract 3-5 standout highlights that capture the most compelling and unique aspects of this research paper. Focus on what makes this paper distinctive rather than summarizing standard content.
+Extract 3-5 highlights that capture the most interesting parts of this paper.
 
-Requirements for Highlights:
-- Each highlight should be a direct, exact quote from the paper
-- Each highlight must be accompanied by a brief annotation (1-2 sentences) explaining its significance or relevance to the paper's contributions
+Your reader is a 1st-year Master's student who:
+- Rarely reads papers
+- Is NOT a native English speaker
+- Wants to understand WHY each highlight matters, in simple words
 
-Selection Criteria:
-Prioritize highlights that are:
-- Novel or surprising: Unexpected findings, counterintuitive results, or breakthrough discoveries
-- Methodologically innovative: New techniques, creative experimental designs, or unique approaches
-- High-impact insights: Findings that could change how the field thinks about a problem
-- Quantitatively significant: Impressive performance gains, large effect sizes, or notable statistical findings
-- Practically valuable: Real-world applications, actionable implications, or scalable solutions
+Requirements:
+- Each highlight should be a direct quote from the paper
+- Each must include a SHORT annotation (1-2 simple sentences) explaining:
+  * What this means in simple words
+  * Why it is important or interesting
+  * How a beginner should understand it
 
-Content Sources:
-- Key results from tables/figures: Extract specific metrics, comparisons, or visual insights
-- Critical methodology details: Novel algorithms, experimental setups, or analytical approaches
-- Standout conclusions: Bold claims, important limitations, or paradigm-shifting implications
-- Notable observations: Interesting patterns, unexpected behaviors, or important caveats
+Selection criteria:
+Pick highlights that are:
+- Interesting or surprising findings
+- Important results (use simple numbers when possible)
+- Useful methods or approaches a beginner should know about
 
-Quality Guidelines:
-- Selectivity: Choose only the most essential "must-read" elements—what would experts in the field find most noteworthy?
-- Specificity: Prefer concrete findings over general statements
-- Diversity: Ensure highlights span different aspects (methods, results, implications) and types, without referencing the abstract
-- Context: Each annotation should explain *why* this highlight matters to the broader research landscape
-
-What to Avoid:
-- Generic background information or literature review content
-- Standard methodology descriptions unless truly innovative
-- Routine experimental procedures or common practices
-- Abstract-level summaries that don't reveal paper specifics
-- Redundant highlights that convey similar information
-- Snippets that are pulled directly from the abstract or summary
-
-Think: "If I could only share 3-5 insights from this paper with a colleague, what would make them most excited to read the full work?"
+Writing style:
+- Simple words, short sentences
+- Explain any technical term in parentheses
+- Focus on what a new reader NEEDS to know
+- Avoid academic jargon
 """,
     )
 
 
 class PaperMetadataExtraction(BaseModel):
     """Extracted metadata from a paper"""
+
     title: str = Field(description="Title of the paper in normal case")
     authors: List[str] = Field(default=[], description="List of authors")
     abstract: str = Field(default="", description="Abstract of the paper")
@@ -207,6 +211,7 @@ The summary should be accessible to readers with basic domain knowledge while ma
 
 class PDFProcessingResult(BaseModel):
     """Result of PDF processing"""
+
     success: bool
     job_id: str
     raw_content: Optional[str] = None
@@ -219,52 +224,59 @@ class PDFProcessingResult(BaseModel):
     error: Optional[str] = None
     duration: Optional[float] = None  # Duration in seconds
 
+
 class DocumentMapping(BaseModel):
     title: str
     s3_object_key: str
     id: str
 
+
 class DataTableSchema(BaseModel):
     """Extraction request from the server. Contains primitive (extractable)
     columns only — derived columns are computed server-side after this
     service returns the extracted dataset."""
-    columns: List[str] = Field(
-        description="List of column names in the data table."
-    )
+
+    columns: List[str] = Field(description="List of column names in the data table.")
     papers: List[DocumentMapping] = Field(
         description="List of papers included in the data table."
     )
     list_columns: List[str] = Field(
         default=[],
-        description="Subset of columns whose value is a per-paper collection: one entry per instance found in the paper, each individually cited."
+        description="Subset of columns whose value is a per-paper collection: one entry per instance found in the paper, each individually cited.",
     )
+
 
 class CellEntry(BaseModel):
     """One element of a list-valued cell, individually cited."""
+
     value: str
     key: Optional[str] = None
     citations: List[ResponseCitation] = []
 
+
 class DataTableCellValue(BaseModel):
     """Value for a single cell in the data table with supporting citations."""
+
     value: str = Field(description="The extracted value for this column")
     citations: List[ResponseCitation] = Field(
         default=[],
-        description="List of citations that support this specific value. These should be direct quotes or paraphrases from the paper."
+        description="List of citations that support this specific value. These should be direct quotes or paraphrases from the paper.",
     )
     entries: Optional[List[CellEntry]] = Field(
         default=None,
-        description="Present only on list-valued cells: the individual elements, each with its own citations. `value` holds their joined display form."
+        description="Present only on list-valued cells: the individual elements, each with its own citations. `value` holds their joined display form.",
     )
+
 
 class DataTableRow(BaseModel):
     paper_id: str
     values: dict[str, DataTableCellValue]  # column_name -> cell value with citations
 
+
 class DataTableResult(BaseModel):
     success: bool
-    columns: List[str] = Field(
-        description="List of column names in the data table."
-    )
+    columns: List[str] = Field(description="List of column names in the data table.")
     rows: List[DataTableRow] = Field(default=[], description="Row data per paper")
-    row_failures: List[str] = Field(default=[], description="List of paper_ids that failed to process")
+    row_failures: List[str] = Field(
+        default=[], description="List of paper_ids that failed to process"
+    )
