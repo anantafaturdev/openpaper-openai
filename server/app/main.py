@@ -1,0 +1,129 @@
+import logging
+import os
+
+import uvicorn  # type: ignore
+from dotenv import load_dotenv
+
+# Load configuration before importing providers. Langfuse must initialize after
+# its credentials are available and before clients that it instruments.
+load_dotenv()
+
+from app.logging_config import configure_logging
+from app.observability import configure_langfuse
+
+configure_logging()
+configure_langfuse()
+
+from app.api.annotation_api import annotation_router
+from app.api.api import router
+from app.api.auth_api import auth_router
+from app.api.conversation_api import conversation_router
+from app.api.discover_api import discover_router
+from app.api.highlight_api import highlight_router
+from app.api.message_api import message_router
+from app.api.onboarding_api import onboarding_router
+from app.api.paper_api import paper_router
+from app.api.paper_audio_api import paper_audio_router
+from app.api.paper_image_api import paper_image_router
+from app.api.paper_search_api import paper_search_router
+from app.api.paper_tag_api import paper_tag_router
+from app.api.paper_upload_api import paper_upload_router
+from app.api.project_audio_api import project_audio_router
+from app.api.projects.project_artifacts_api import project_artifacts_router
+from app.api.projects.project_charts_api import project_charts_router
+from app.api.projects.project_conversations_api import project_conversations_router
+from app.api.projects.project_papers_api import project_papers_router
+from app.api.projects.projects_api import projects_router
+from app.api.projects.projects_data_table_api import projects_data_table_router
+from app.api.projects.projects_invitation_api import (
+    router as projects_invitation_router,
+)
+from app.api.referral import referral_router
+from app.api.search_api import search_router
+from app.api.subscription import subscription_router
+from app.api.webhook_api import webhook_router
+from app.api.zotero_import_api import zotero_router
+from app.database.admin import setup_admin
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+logger = logging.getLogger(__name__)
+
+app = FastAPI(
+    title="Open Paper",
+    description="A web application for uploading and annotating papers.",
+    version="1.0.0",
+)
+
+client_domain = os.getenv("CLIENT_DOMAIN", "http://localhost:3000")
+
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[client_domain],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    allow_headers=["*"],
+    expose_headers=["*"],
+    allow_credentials=True,  # This is required for cookies
+    max_age=600,  # Cache preflight requests for 10 minutes
+)
+
+# Include the router in the main app
+app.include_router(router, prefix="/api")
+app.include_router(auth_router, prefix="/api/auth")  # Auth routes
+app.include_router(paper_router, prefix="/api/paper")
+app.include_router(conversation_router, prefix="/api/conversation")
+app.include_router(message_router, prefix="/api/message")
+app.include_router(highlight_router, prefix="/api/highlight")
+app.include_router(annotation_router, prefix="/api/annotation")
+app.include_router(projects_router, prefix="/api/projects")
+app.include_router(project_papers_router, prefix="/api/projects/papers")
+app.include_router(project_conversations_router, prefix="/api/projects/conversations")
+app.include_router(projects_invitation_router, prefix="/api/projects/invitations")
+app.include_router(paper_search_router, prefix="/api/search/global")
+app.include_router(search_router, prefix="/api/search/local")
+app.include_router(paper_audio_router, prefix="/api/paper/audio")
+app.include_router(paper_image_router, prefix="/api/paper/image")
+app.include_router(projects_data_table_router, prefix="/api/projects/tables")
+app.include_router(paper_upload_router, prefix="/api/paper/upload")
+app.include_router(project_audio_router, prefix="/api/projects/audio")
+app.include_router(project_artifacts_router, prefix="/api/projects/artifacts")
+app.include_router(project_charts_router, prefix="/api/projects/charts")
+app.include_router(paper_tag_router, prefix="/api/paper/tag")
+app.include_router(
+    subscription_router, prefix="/api/subscription"
+)  # Subscription routes
+app.include_router(webhook_router, prefix="/api/webhooks")  # Webhook routes
+app.include_router(onboarding_router, prefix="/api/onboarding")
+app.include_router(discover_router, prefix="/api/discover")
+app.include_router(referral_router, prefix="/api/referral")
+app.include_router(zotero_router, prefix="/api/zotero")
+
+setup_admin(app)  # Setup admin interface
+
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", "8000"))
+
+    # Production never reaches this block: the image's CMD is gunicorn, which
+    # imports `app.main:app` and never runs __main__. So the reloader is
+    # dev-only by construction. It is still gated on an env var rather than
+    # switched on outright, because start.sh routes the uncontainerized
+    # `uv run start` through here too, and that is someone's own setup to
+    # decide about. The containerized stack sets UVICORN_RELOAD itself.
+    reload = os.getenv("UVICORN_RELOAD", "").strip().lower() in {"1", "true", "yes"}
+
+    uvicorn.run(
+        "app.main:app",
+        host="0.0.0.0",
+        port=port,
+        reload=reload,
+        # Only the application package. The server directory also holds eval
+        # fixtures, dev tooling and tests — none of them should trigger a
+        # restart, and the seed PDFs would make the watcher needlessly
+        # expensive.
+        reload_dirs=[os.path.dirname(os.path.abspath(__file__))] if reload else None,
+        log_level="debug",  # Set higher log level to see more details
+        log_config=None,  # Keep the handlers configure_logging() installed
+        forwarded_allow_ips="*",  # Allow all forwarded IPs
+        proxy_headers=True,  # Enable proxy headers
+    )

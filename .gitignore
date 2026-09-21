@@ -1,0 +1,27 @@
+# Environment files (contain secrets)
+server/.env
+jobs/.env
+
+# Node
+client/node_modules/
+client/.next/
+client/.env.local
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Docker
+pgdata/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,409 @@
+import re
+from enum import Enum
+from typing import Any, Dict, List, Literal, Optional, Union
+
+from app.schemas.citation import CitationResult
+from app.schemas.responses import ToolCall, ToolCallResult
+from pydantic import BaseModel, Field
+
+
+class ResponseStyle(str, Enum):
+    NORMAL = "normal"
+    CONCISE = "concise"
+    DETAILED = "detailed"
+
+
+class Evidence(BaseModel):
+    """Model for managing evidence gathered from papers"""
+
+    paper_id: str = Field(
+        ...,
+        description="Unique identifier for the paper. Not to be used for user-facing responses. Only for internal tracking.",
+    )
+    content: List[str] = Field(
+        default_factory=list, description="List of evidence content strings"
+    )
+    metadata: Dict[str, List[str]] = Field(
+        default_factory=dict, description="Metadata associated with the evidence"
+    )
+
+    def add_content(
+        self, content: Union[str, List[str]], with_line_numbers: bool = False
+    ) -> None:
+        """Add content to the evidence"""
+        if isinstance(content, str):
+            self.content.append(content)
+            if with_line_numbers:
+                # Extract line numbers from content like "123: some text"
+                line_match = re.match(r"^(\d+):\s*(.+)", content)
+                if line_match:
+                    line_num = line_match.group(1)
+                    clean_content = line_match.group(2)
+                    if "line_numbers" not in self.metadata:
+                        self.metadata["line_numbers"] = []
+                    self.metadata["line_numbers"].append(line_num)
+                    # Replace with clean content
+                    self.content[-1] = clean_content
+        else:
+            for item in content:
+                self.add_content(item, with_line_numbers)
+
+    def get_clean_content(self) -> List[str]:
+        """Get content without line number prefixes"""
+        return self.content
+
+    def get_line_numbers(self) -> List[str]:
+        """Get associated line numbers"""
+        return self.metadata.get("line_numbers", [])
+
+
+class OriginalSnippet(BaseModel):
+    """An original evidence snippet with its source metadata."""
+
+    paper_id: str = Field(description="The paper ID this snippet came from")
+    text: str = Field(description="The original snippet text")
+    line_number: Optional[str] = Field(
+        default=None, description="Line number in source paper"
+    )
+
+
+class CitationIndex(BaseModel):
+    """Maps compaction citation markers to original evidence snippets."""
+
+    # Key: "{paper_id}:{snippet_index}" e.g., "abc123:0"
+    index: Dict[str, OriginalSnippet] = Field(
+        default_factory=dict,
+        description="Mapping of paper_id:index keys to original snippets",
+    )
+
+
+class EvidenceCollection(BaseModel):
+    """Collection of evidence from multiple papers"""
+
+    evidence: Dict[str, Evidence] = Field(
+        default_factory=dict, description="Mapping of paper IDs to their evidence"
+    )
+    previous_tool_calls: List[ToolCall] = Field(
+        default_factory=list,
+        description="List of previous tool calls made during evidence gathering",
+    )
+    tool_call_results: List[ToolCallResult] = Field(
+        default_factory=list,
+        description="List of tool call results for proper multi-turn function calling",
+    )
+    citation_index: CitationIndex = Field(
+        default_factory=CitationIndex,
+        description="Sidecar storage for original snippets during compaction",
+    )
+    is_compacted: bool = Field(
+        default=False,
+        description="Whether evidence has been compacted (citations need resolution)",
+    )
+    artifacts: List[CitationResult] = Field(
+        default_factory=list,
+        description="First-party artifacts produced during gathering (e.g. citations)",
+    )
+    chart_jobs: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Chart jobs queued during gathering; nothing here has run yet",
+    )
+
+    def add_artifact(self, artifact: CitationResult) -> None:
+        """Record a first-party artifact (e.g. a resolved citation)."""
+        self.artifacts.append(artifact)
+
+    def get_artifacts(self) -> List[CitationResult]:
+        return self.artifacts
+
+    def add_chart_job(self, job: Dict[str, Any]) -> None:
+        """Record a chart job the request tool queued.
+
+        Kept apart from `artifacts`, which hold finished work. A chart takes
+        minutes and outlives this turn's response, so what travels here is the
+        job: the client renders it as a pending card, and the caller dispatches
+        it once the turn's message exists to attach the result to.
+        """
+        self.chart_jobs.append(job)
+
+    def get_chart_jobs(self) -> List[Dict[str, Any]]:
+        return self.chart_jobs
+
+    def describe_actions(self) -> Optional[Dict[str, Any]]:
+        """What this turn did, for the model that has to write about it.
+
+        Gathering and answering are two separate model calls. The tool results
+        are replayed into the gathering loop and stop there; the answering model
+        is handed digested evidence instead, which is usually right — the
+        passages are the point, not the searches that found them. But an action
+        whose outcome is not evidence disappears at that boundary. A queued
+        chart is the clearest case: its card is already on the user's screen,
+        and without this the answer never mentions it, or worse, describes a
+        chart it has never seen.
+
+        So this is the actions, not their contents: what was done, and what now
+        exists because of it. The citation data travels separately, because
+        that one the model does need to read.
+        """
+        # The tools that produce something get their own entry below, so
+        # counting them here as well would report each one twice.
+        reported_separately = {"stop", "find_citation", "create_chart_artifact"}
+        searched = [
+            call.name
+            for call in self.previous_tool_calls
+            if call.name not in reported_separately
+        ]
+        actions: Dict[str, Any] = {}
+        if searched:
+            # Convert tool call result note to human-readable phrases for the note
+            note = f"Searched the papers in scope {len(searched)} time(s)."
+            if not self.has_evidence():
+                note += (
+                    " Nothing matched. Answer from the papers named above and"
+                    " anything else you were given, and say plainly what could"
+                    " not be found."
+                )
+            actions["evidence_gathering"] = note
+        if self.artifacts:
+            actions["citations_resolved"] = [a.paper_id for a in self.artifacts]
+        if self.chart_jobs:
+            actions["charts_started"] = [
+                {
+                    "request": job.get("prompt"),
+                    "status": "being built now; takes a few minutes, arrives on its own",
+                    # Saying only "don't describe it" produces a model that
+                    # proves its compliance out loud: it restates the request
+                    # back in full, formally, to show it has not looked. Hence
+                    # a worked example of the good version — what to do is the
+                    # instruction that carries, and what not to do trails it.
+                    "how_to_mention_it": (
+                        "One short clause in your own voice, then straight on "
+                        "with the answer: \"I'm charting fever timing against "
+                        "the reported disorders now — in the meantime, the "
+                        'papers say...". Do not restate the request back, do '
+                        'not call it "the requested chart", do not narrate '
+                        "that it is generating, and do not mention screens. "
+                        "You cannot see it, so never describe, summarize, or "
+                        "predict what it will show."
+                    ),
+                }
+                for job in self.chart_jobs
+            ]
+        return actions or None
+
+    def to_trace_dict(self) -> Optional[Dict[str, Any]]:
+        """Compact trajectory of this turn for user-facing inspection: the tool
+        calls made and, for any citation subagent runs, their internal steps."""
+        tool_calls = [
+            {"name": tc.name, "args": tc.args} for tc in self.previous_tool_calls
+        ]
+        citations = [
+            {
+                "paper_id": a.paper_id,
+                "method": a.method,
+                "preferred_style": a.preferred_style,
+                "steps": [step.model_dump() for step in a.steps],
+            }
+            for a in self.artifacts
+        ]
+        if not tool_calls and not citations:
+            return None
+        return {"tool_calls": tool_calls, "citations": citations}
+
+    def load_from_dict(self, evidence_dict: Dict[str, List[str]]) -> None:
+        """Load evidence from a dictionary format"""
+        for paper_id, content in evidence_dict.items():
+            self.evidence[paper_id] = Evidence(paper_id=paper_id, content=content)
+
+    def add_evidence(
+        self,
+        paper_id: str,
+        content: Union[str, List[str]],
+        preserve_line_numbers: bool = False,
+    ) -> None:
+        """Add evidence for a specific paper"""
+        if paper_id not in self.evidence:
+            self.evidence[paper_id] = Evidence(paper_id=paper_id, content=[])
+        self.evidence[paper_id].add_content(
+            content, with_line_numbers=preserve_line_numbers
+        )
+
+    def add_tool_call(self, tool_call: ToolCall) -> None:
+        """Add a tool call to the collection"""
+        self.previous_tool_calls.append(tool_call)
+
+    def add_tool_call_result(
+        self, tool_call: ToolCall, result: Union[str, List, Dict, None]
+    ) -> None:
+        """Add a tool call result for proper multi-turn function calling"""
+        self.tool_call_results.append(
+            ToolCallResult(
+                id=tool_call.id,
+                name=tool_call.name,
+                args=tool_call.args,
+                result=result,
+                thought_signature=tool_call.thought_signature,
+            )
+        )
+
+    def get_tool_call_results(self) -> List[ToolCallResult]:
+        """Get all tool call results for passing to LLM"""
+        return self.tool_call_results
+
+    def get_evidence_dict(self) -> Dict[str, List[str]]:
+        """Convert to dictionary format for backward compatibility - returns clean content without line numbers"""
+        return {
+            paper_id: evidence.get_clean_content()
+            for paper_id, evidence in self.evidence.items()
+        }
+
+    def get_evidence_dict_with_metadata(
+        self,
+    ) -> Dict[str, Dict[str, Union[List[str], Dict]]]:
+        """Get evidence with metadata for agent context"""
+        return {
+            paper_id: {"content": evidence.content, "metadata": evidence.metadata}
+            for paper_id, evidence in self.evidence.items()
+        }
+
+    def has_evidence(self) -> bool:
+        """Check if any evidence has been collected"""
+        return bool(self.evidence)
+
+    def has_previous_tool_calls(self) -> bool:
+        """Check if there are any previous tool calls"""
+        return bool(self.previous_tool_calls)
+
+    def get_tool_results_size(self) -> int:
+        """Calculate the total character size of all tool call results"""
+        import json
+
+        total_size = 0
+        for result in self.tool_call_results:
+            result_value = result.result
+            if isinstance(result_value, (dict, list)):
+                total_size += len(json.dumps(result_value))
+            elif result_value is not None:
+                total_size += len(str(result_value))
+        return total_size
+
+    def get_tool_results_for_compaction(self) -> List[Dict[str, Any]]:
+        """Get tool results in a format suitable for LLM compaction"""
+        import json
+
+        results = []
+        for result in self.tool_call_results:
+            result_value = result.result
+            if isinstance(result_value, (dict, list)):
+                result_str = json.dumps(result_value)
+            elif result_value is not None:
+                result_str = str(result_value)
+            else:
+                result_str = "None"
+
+            results.append(
+                {
+                    "id": result.id or "",
+                    "name": result.name,
+                    "result": result_str[
+                        :10000
+                    ],  # Truncate very long individual results
+                }
+            )
+        return results
+
+    def apply_compacted_results(
+        self, compacted_results: List["CompactedToolResult"]
+    ) -> None:
+        """Replace tool call results with compacted versions, preserving original args"""
+        # Build a lookup of original args by id
+        original_args_by_id = {r.id: r.args for r in self.tool_call_results if r.id}
+
+        self.tool_call_results = [
+            ToolCallResult(
+                id=cr.id,
+                name=cr.name,
+                args=original_args_by_id.get(cr.id, {}),
+                result=cr.summary,
+            )
+            for cr in compacted_results
+        ]
+
+    def get_evidence_size(self) -> int:
+        """Calculate the total character size of all evidence"""
+        total_size = 0
+        for evidence in self.evidence.values():
+            for snippet in evidence.content:
+                total_size += len(snippet)
+        return total_size
+
+    def apply_compacted_evidence(
+        self, compacted_evidence: Dict[str, List[str]]
+    ) -> None:
+        """Replace evidence with compacted versions from LLM compaction"""
+        # Clear existing evidence and load compacted version
+        self.evidence.clear()
+        for paper_id, snippets in compacted_evidence.items():
+            self.evidence[paper_id] = Evidence(paper_id=paper_id, content=snippets)
+
+
+class CompactedToolResult(BaseModel):
+    """A single compacted tool result"""
+
+    id: str = Field(description="The original tool call ID")
+    name: str = Field(description="The tool/function name that was called")
+    summary: str = Field(
+        description="Concise summary of the result, preserving key information"
+    )
+
+
+class ToolResultCompactionResponse(BaseModel):
+    """Response structure for tool result compaction"""
+
+    compacted_results: List[CompactedToolResult] = Field(
+        default_factory=list,
+        description="List of compacted tool results with summaries",
+    )
+
+
+class SummaryCitationMarker(BaseModel):
+    """A citation marker in a summary pointing to an original snippet."""
+
+    marker: int = Field(description="The [@n] marker number used in the summary")
+    original_snippet_index: int = Field(
+        description="Index of the original snippet this marker references"
+    )
+
+
+class PaperEvidenceSummary(BaseModel):
+    """Summary of evidence from a single paper."""
+
+    paper_id: str = Field(description="The paper ID")
+    summary: str = Field(
+        description="Concise summary with [@n] markers referencing original snippets"
+    )
+    citations: List[SummaryCitationMarker] = Field(
+        default_factory=list,
+        description="Mapping of [@n] markers to original snippet indices",
+    )
+
+
+class EvidenceSummaryResponse(BaseModel):
+    """Response for evidence compaction - one summary per paper."""
+
+    papers: List[PaperEvidenceSummary] = Field(
+        default_factory=list,
+        description="List of paper summaries. You may omit papers with no relevant evidence.",
+    )
+
+
+class EvidenceCompactionResponse(BaseModel):
+    """Response structure for evidence compaction before chat response.
+
+    The format matches EvidenceCollection.get_evidence_dict() output:
+    Dict[str, List[str]] mapping paper_id to list of evidence strings.
+    """
+
+    compacted_evidence: Dict[str, List[str]] = Field(
+        default_factory=dict,
+        description="Mapping of paper IDs to their compacted evidence snippets. Each paper should have a reduced list of summarized evidence strings that preserve key findings, quotes, and data points.",
+    )

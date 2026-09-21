@@ -1,0 +1,872 @@
+import logging
+import uuid
+from typing import List, Optional
+
+from app.auth.dependencies import get_current_user, get_required_user
+from app.database.crud.annotation_crud import annotation_crud
+from app.database.crud.conversation_crud import conversation_crud
+from app.database.crud.highlight_crud import highlight_crud
+from app.database.crud.paper_crud import PaperUpdate, paper_crud
+from app.database.crud.paper_note_crud import (
+    PaperNoteCreate,
+    PaperNoteUpdate,
+    paper_note_crud,
+)
+from app.database.crud.paper_upload_crud import paper_upload_job_crud
+from app.database.crud.projects.project_paper_crud import project_paper_crud
+from app.database.database import get_db
+from app.database.models import Paper, PaperStatus, ZoteroImportedItem
+from app.database.telemetry import track_event
+from app.helpers.metadata_hydration import hydrate_paper_metadata
+from app.helpers.s3 import s3_service
+from app.helpers.subscription_limits import can_user_upload_paper
+from app.schemas.responses import ResponseCitation
+from app.schemas.user import CurrentUser
+from dotenv import load_dotenv
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+load_dotenv()
+
+logger = logging.getLogger(__name__)
+
+# Create API router with prefix
+paper_router = APIRouter()
+
+
+class SharePaperSchemaResponse(BaseModel):
+    paper_data: dict
+    highlight_data: dict
+    annotations_data: dict
+
+
+class CreatePaperNoteSchema(BaseModel):
+    content: Optional[str]
+
+
+class UpdatePaperNoteSchema(BaseModel):
+    content: str
+
+
+class UpdatePaperFieldsSchema(BaseModel):
+    title: Optional[str] = None
+    authors: Optional[List[str]] = None
+    abstract: Optional[str] = None
+    institutions: Optional[List[str]] = None
+    publish_date: Optional[str] = None
+    doi: Optional[str] = None
+    journal: Optional[str] = None
+    publisher: Optional[str] = None
+
+
+@paper_router.get("/all")
+async def get_paper_ids(
+    db: Session = Depends(get_db),
+    detailed: bool = False,
+    current_user: CurrentUser = Depends(get_required_user),
+):
+    """
+    Get all paper IDs
+    """
+    papers: List[Paper] = paper_crud.get_multi_uploads_completed(db, user=current_user)
+
+    # Bulk retrieve presigned URLs for all papers (optimized with parallelization)
+    file_urls = {}
+    if detailed:
+        file_urls = s3_service.get_cached_presigned_urls_bulk(
+            db=db,
+            papers=papers,
+        )
+
+    data = [
+        {
+            "id": str(paper.id),
+            "title": paper.title,
+            "created_at": str(paper.created_at),
+            "abstract": paper.abstract,
+            "authors": paper.authors,
+            "institutions": paper.institutions,
+            "status": paper.status,
+            "preview_url": paper.preview_url,
+            "size_in_kb": paper.size_in_kb,
+            "publish_date": (str(paper.publish_date) if paper.publish_date else None),
+            "file_url": file_urls.get(str(paper.id)),
+            "tags": [{"id": str(tag.id), "name": tag.name, "color": tag.color} for tag in paper.tags],  # type: ignore
+        }
+        for paper in papers
+    ]
+    return JSONResponse(
+        status_code=200,
+        content={"papers": data},
+    )
+
+
+@paper_router.get("/active")
+async def get_active_paper_ids(
+    db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(get_required_user),
+):
+    """
+    Get all active paper IDs
+    """
+    papers: List[Paper] = paper_crud.get_multi_uploads_completed(
+        db, user=current_user, status=PaperStatus.reading
+    )
+    if not papers:
+        return JSONResponse(
+            status_code=404, content={"message": "No active papers found"}
+        )
+
+    data = [
+        {
+            "id": str(paper.id),
+            "title": paper.title,
+            "created_at": str(paper.created_at),
+            "abstract": paper.abstract,
+            "authors": paper.authors,
+            "institutions": paper.institutions,
+            "status": paper.status,
+            "preview_url": paper.preview_url,
+            "size_in_kb": paper.size_in_kb,
+            "publish_date": (str(paper.publish_date) if paper.publish_date else None),
+        }
+        for paper in papers
+    ]
+
+    return JSONResponse(
+        status_code=200,
+        content={"papers": data},
+    )
+
+
+@paper_router.get("/pending-jobs")
+async def get_user_pending_jobs(
+    db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(get_required_user),
+) -> JSONResponse:
+    """
+    Get the user's in-progress upload jobs across their whole library, so the
+    Library page can rehydrate the upload tracker after a refresh. Dead jobs are
+    filtered out server-side (see STALE_UPLOAD_JOB_CUTOFF).
+    """
+    try:
+        jobs = paper_upload_job_crud.get_in_progress_jobs_for_user(
+            db, user=current_user
+        )
+
+        return JSONResponse(
+            status_code=200,
+            content={
+                "jobs": [
+                    {
+                        "job_id": str(job.id),
+                        "status": job.status,
+                        "paper_id": str(paper.id),
+                        "title": paper.title,
+                        "started_at": (
+                            job.started_at.isoformat() if job.started_at else None
+                        ),
+                    }
+                    for job, paper in jobs
+                ]
+            },
+        )
+
+    except Exception as e:
+        logger.error(f"Error fetching pending upload jobs: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=400,
+            content={"message": "Failed to fetch pending upload jobs"},
+        )
+
+
+@paper_router.get("/{id}/file-url")
+async def get_paper_file_url(
+    id: str,
+    db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(get_required_user),
+) -> JSONResponse:
+    """
+    Get a fresh presigned file URL for a single owned paper.
+
+    This is the cheap path for "my URL expired, give me a fresh one" — it
+    avoids the metadata enrichment and full document payload (raw_content,
+    etc.) that GET /api/paper returns.
+    """
+    paper = paper_crud.get(db, id=id, user=current_user)
+    if not paper:
+        return JSONResponse(status_code=404, content={"message": "Document not found"})
+
+    file_url = s3_service.get_cached_presigned_url(
+        db,
+        paper_id=str(paper.id),
+        object_key=str(paper.s3_object_key),
+        current_user=current_user,
+    )
+    if not file_url:
+        return JSONResponse(status_code=404, content={"message": "File not found"})
+
+    return JSONResponse(status_code=200, content={"file_url": file_url})
+
+
+@paper_router.get("/note")
+async def get_paper_note(
+    paper_id: str,
+    db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(get_required_user),
+):
+    """
+    Get the paper note associated with this document.
+    """
+    target_paper = paper_crud.get(
+        db, id=paper_id, user=current_user, update_last_accessed=True
+    )
+
+    if not target_paper:
+        raise HTTPException(status_code=404, detail=f"No document with id {paper_id}")
+
+    paper_note = paper_note_crud.get_paper_note_by_paper_id(
+        db, paper_id=paper_id, user=current_user
+    )
+
+    if paper_note:
+        return JSONResponse(content=paper_note.to_dict(), status_code=200)
+
+    raise HTTPException(
+        status_code=404, detail=f"Paper Note does not exist for document {paper_id}"
+    )
+
+
+@paper_router.post("/note")
+async def create_paper_note(
+    paper_id: str,
+    request: CreatePaperNoteSchema,
+    db: Session = Depends(get_db),
+    current_user: Optional[CurrentUser] = Depends(get_required_user),
+):
+    """
+    Create the paper note associated with this document
+    """
+    content = request.content
+    target_paper = paper_crud.get(
+        db, id=paper_id, user=current_user, update_last_accessed=True
+    )
+
+    if not target_paper:
+        raise HTTPException(status_code=404, detail=f"No document with id {paper_id}")
+
+    paper_note_to_create = PaperNoteCreate(
+        paper_id=uuid.UUID(paper_id), content=content
+    )
+
+    paper_note = paper_note_crud.create(
+        db, obj_in=paper_note_to_create, user=current_user
+    )
+
+    if not paper_note:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create paper note for document ID {paper_id}",
+        )
+
+    track_event(
+        "paper_note_created",
+        properties={
+            "paper_id": str(paper_note.paper_id),
+            "note_id": str(paper_note.id),
+        },
+        user_id=str(current_user.id) if current_user else None,
+        db=db,
+    )
+
+    return JSONResponse(content=paper_note.to_dict(), status_code=201)
+
+
+@paper_router.post("/status")
+async def set_paper_status(
+    paper_id: str,
+    status: PaperStatus,
+    db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(get_required_user),
+):
+    """
+    Set the status of a paper
+    """
+    target_paper = paper_crud.get(db, id=paper_id, user=current_user)
+
+    if not target_paper:
+        raise HTTPException(status_code=404, detail=f"No document with id {paper_id}")
+
+    paper_update = PaperUpdate(status=status)
+    updated_paper = paper_crud.update(
+        db=db, db_obj=target_paper, obj_in=paper_update, user=current_user
+    )
+
+    if not updated_paper:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update paper status for document ID {paper_id}",
+        )
+
+    track_event(
+        "paper_status_updated",
+        properties={
+            "paper_id": str(updated_paper.id),
+            "status": updated_paper.status,
+        },
+        user_id=str(current_user.id),
+        db=db,
+    )
+
+    return JSONResponse(content=updated_paper.to_dict(), status_code=200)
+
+
+@paper_router.patch("")
+async def update_paper_fields(
+    paper_id: str,
+    request: UpdatePaperFieldsSchema,
+    db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(get_required_user),
+):
+    """
+    Update editable fields of a paper (title, authors, abstract, etc.)
+    """
+    target_paper = paper_crud.get(db, id=paper_id, user=current_user)
+
+    if not target_paper:
+        raise HTTPException(status_code=404, detail=f"No document with id {paper_id}")
+
+    update_data = request.model_dump(exclude_unset=True)
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    updated_paper = paper_crud.update(
+        db=db, db_obj=target_paper, obj_in=update_data, user=current_user
+    )
+
+    if not updated_paper:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update paper fields for document ID {paper_id}",
+        )
+
+    track_event(
+        "paper_fields_updated",
+        properties={
+            "paper_id": str(updated_paper.id),
+            "updated_fields": list(update_data.keys()),
+        },
+        user_id=str(current_user.id),
+        db=db,
+    )
+
+    return JSONResponse(content=updated_paper.to_dict(), status_code=200)
+
+
+@paper_router.get("/relevant")
+async def get_relevant_papers(
+    db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(get_required_user),
+):
+    """
+    Get the most relevant papers uploaded by the user
+    """
+    papers: List[Paper] = paper_crud.get_top_relevant_papers(db, user=current_user)
+    if not papers:
+        return JSONResponse(
+            status_code=404, content={"message": "No relevant papers found"}
+        )
+
+    return JSONResponse(
+        status_code=200,
+        content={
+            "papers": [
+                {
+                    "id": str(paper.id),
+                    "title": paper.title,
+                    "created_at": str(paper.created_at),
+                    "abstract": paper.abstract,
+                    "authors": paper.authors,
+                    "institutions": paper.institutions,
+                    "status": paper.status,
+                    "preview_url": paper.preview_url,
+                    "size_in_kb": paper.size_in_kb,
+                }
+                for paper in papers
+            ]
+        },
+    )
+
+
+@paper_router.put("/note")
+async def update_paper_note(
+    paper_id: str,
+    request: UpdatePaperNoteSchema,
+    db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(get_required_user),
+):
+    """
+    Update the paper note associated with this document
+    """
+    content = request.content
+    target_paper = paper_crud.get(
+        db, id=paper_id, user=current_user, update_last_accessed=True
+    )
+
+    if not target_paper:
+        raise HTTPException(status_code=404, detail=f"No document with id {paper_id}")
+
+    paper_note = paper_note_crud.get_paper_note_by_paper_id(
+        db, paper_id=paper_id, user=current_user
+    )
+
+    if not paper_note:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No paper note associated with document ID {paper_id}",
+        )
+
+    paper_note_to_update = PaperNoteUpdate(content=content)
+
+    updated_paper_note = paper_note_crud.update(
+        db=db, db_obj=paper_note, obj_in=paper_note_to_update, user=current_user
+    )
+
+    if not updated_paper_note:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update paper note for document ID {paper_id}",
+        )
+
+    track_event(
+        "paper_note_updated",
+        properties={
+            "paper_id": str(updated_paper_note.paper_id),
+            "note_id": str(updated_paper_note.id),
+            "content_length": (
+                len(str(updated_paper_note.content))
+                if updated_paper_note.content
+                else 0
+            ),
+        },
+        user_id=str(current_user.id) if current_user else None,
+        db=db,
+    )
+
+    return JSONResponse(content=updated_paper_note.to_dict(), status_code=200)
+
+
+@paper_router.get("/conversation")
+async def get_mru_paper_conversation(
+    paper_id: str,
+    db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(get_required_user),
+):
+    """
+    Get latest conversation associated with specific document
+    """
+    casted_paper_id = uuid.UUID(paper_id)
+
+    # Fetch the document from the database
+    document = paper_crud.get(
+        db, id=paper_id, user=current_user, update_last_accessed=True
+    )
+
+    if not document:
+        return JSONResponse(status_code=404, content={"message": "Document not found"})
+
+    # Fetch the latest conversation associated with the document
+    conversations = conversation_crud.get_document_conversations(
+        db, paper_id=casted_paper_id, current_user=current_user
+    )
+
+    if not conversations or len(conversations) == 0:
+        # No conversations found for the document
+        logger.info(f"No conversations found for document ID {paper_id}")
+        return JSONResponse(
+            status_code=404, content={"message": "No conversations found"}
+        )
+
+    latest_conversation = conversations[-1]
+
+    # Prepare the response data
+    conversation_data = (
+        latest_conversation.to_dict()
+    )  # Assuming to_dict() method exists
+
+    # Return the conversation data
+    return JSONResponse(status_code=200, content=conversation_data)
+
+
+@paper_router.get("")
+async def get_pdf(
+    request: Request,
+    id: str,
+    db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(get_required_user),
+):
+    """
+    Get a document by ID
+    """
+    # Fetch the document from the database
+    paper = paper_crud.get(db, id=id, user=current_user, update_last_accessed=True)
+
+    if not paper:
+        return JSONResponse(status_code=404, content={"message": "Document not found"})
+
+    signed_url = s3_service.get_cached_presigned_url(
+        db,
+        paper_id=str(paper.id),
+        object_key=str(paper.s3_object_key),
+        current_user=current_user,
+    )
+    if not signed_url:
+        return JSONResponse(status_code=404, content={"message": "File not found"})
+
+    paper = hydrate_paper_metadata(db=db, paper=paper, user=current_user)
+
+    paper_data = paper.to_dict()
+    paper_data["file_url"] = signed_url
+    paper_data["summary_citations"] = [  # type: ignore
+        ResponseCitation.model_validate(citation).model_dump()
+        for citation in paper.summary_citations or []
+    ]
+
+    paper_data["summary"] = paper_crud.get_summary_replace_image_placeholders(
+        db, paper_id=id, current_user=current_user
+    )
+
+    paper_data["tags"] = [  # type: ignore
+        {"id": str(t.id), "name": t.name, "color": t.color} for t in paper.tags  # type: ignore
+    ]
+
+    # Flag whether this paper originated from a Zotero import (surfaced as a
+    # provenance badge in the library detail panel).
+    paper_data["zotero_synced"] = (
+        db.query(ZoteroImportedItem.id)
+        .filter(
+            ZoteroImportedItem.paper_id == paper.id,
+            ZoteroImportedItem.user_id == current_user.id,
+        )
+        .first()
+        is not None
+    )
+
+    # Return the file URL
+    return JSONResponse(status_code=200, content=paper_data)
+
+
+@paper_router.post("/share")
+async def share_pdf(
+    request: Request,
+    id: str,
+    db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(get_required_user),
+):
+    """
+    Share a document by ID
+    """
+    # Fetch the document from the database
+    paper = paper_crud.get(db, id=id, user=current_user)
+
+    if not paper:
+        return JSONResponse(status_code=404, content={"message": "Document not found"})
+
+    paper_crud.make_public(db, paper_id=id, user=current_user)
+
+    track_event(
+        "paper_share",
+        properties={
+            "paper_id": str(paper.id),
+            "share_id": paper.share_id,
+        },
+        user_id=str(current_user.id),
+        db=db,
+    )
+
+    # Return the updated sharing state so the client can use it as the source of truth
+    return JSONResponse(
+        status_code=200,
+        content={
+            "message": "Document shared successfully",
+            "share_id": paper.share_id,
+            "is_public": paper.is_public,
+        },
+    )
+
+
+@paper_router.post("/unshare")
+async def unshare_pdf(
+    request: Request,
+    id: str,
+    db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(get_required_user),
+):
+    """
+    Unshare a document by ID
+    """
+    # Fetch the document from the database
+    paper = paper_crud.get(db, id=id, user=current_user)
+
+    if not paper:
+        return JSONResponse(status_code=404, content={"message": "Document not found"})
+
+    paper_crud.make_private(db, paper_id=id, user=current_user)
+
+    track_event(
+        "paper_unshare",
+        properties={
+            "paper_id": str(paper.id),
+            "share_id": paper.share_id,
+        },
+        user_id=str(current_user.id),
+        db=db,
+    )
+
+    # Return the updated sharing state so the client can use it as the source of truth
+    return JSONResponse(
+        status_code=200,
+        content={
+            "message": "Document unshared successfully",
+            "share_id": paper.share_id,
+            "is_public": paper.is_public,
+        },
+    )
+
+
+@paper_router.get("/share")
+async def get_shared_pdf(
+    request: Request,
+    id: str,
+    db: Session = Depends(get_db),
+    current_user: Optional[CurrentUser] = Depends(get_current_user),
+):
+    """
+    Get a shared document by ID
+    """
+    # Fetch the document from the database
+    response = {}
+
+    paper = paper_crud.get_public_paper(db, share_id=id)
+
+    if not paper:
+        return JSONResponse(status_code=404, content={"message": "Document not found"})
+
+    paper_data = paper.to_dict()
+
+    signed_url = s3_service.get_cached_presigned_url_by_owner(
+        db,
+        paper_id=str(paper.id),
+        object_key=str(paper.s3_object_key),
+        owner_id=str(paper.user_id),
+    )
+    if not signed_url:
+        return JSONResponse(status_code=404, content={"message": "File not found"})
+
+    annotations = annotation_crud.get_public_annotations_data_by_paper_id(
+        db, share_id=uuid.UUID(id)
+    )
+
+    highlights = highlight_crud.get_public_highlights_data_by_paper_id(db, share_id=id)
+
+    paper_data["file_url"] = signed_url
+    paper_data["summary_citations"] = [  # type: ignore
+        ResponseCitation.model_validate(citation).model_dump()
+        for citation in paper.summary_citations or []
+    ]
+    paper_data["summary"] = (
+        paper_crud.get_summary_replace_image_placeholders_shared_paper(
+            db, paper_id=str(paper.id)
+        )
+    )
+    response["paper"] = paper_data
+    response["highlights"] = [highlight.to_dict() for highlight in highlights]
+    response["annotations"] = [annotation.to_dict() for annotation in annotations]
+    response["owner"] = {"name": paper.user.name, "picture": paper.user.picture, "id": str(paper.user.id)}  # type: ignore
+
+    track_event(
+        "paper_shared_view",
+        properties={
+            "paper_id": str(paper.id),
+            "share_id": paper.share_id,
+        },
+        user_id=str(current_user.id) if current_user else None,
+        db=db,
+    )
+
+    # Return the file URL
+    return JSONResponse(status_code=200, content=response)
+
+
+@paper_router.delete("")
+async def delete_pdf(
+    request: Request,
+    id: str,
+    db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(get_required_user),
+):
+    """
+    Delete a document by ID
+    """
+    # Fetch the document from the database
+    paper = paper_crud.get(db, id=id, user=current_user)
+
+    if not paper:
+        return JSONResponse(status_code=404, content={"message": "Document not found"})
+
+    s3_object_key = paper.s3_object_key
+
+    # Delete the document from the database
+    try:
+        projects = project_paper_crud.get_projects_by_paper_id(
+            db, paper_id=uuid.UUID(id), user=current_user
+        )
+
+        if len(projects) > 0:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "message": "Cannot delete document associated with projects. Please remove the document from all projects before deleting."
+                },
+            )
+
+        removed_paper = paper_crud.remove(db, id=id, user=current_user)
+        if not removed_paper and paper_crud.get(db, id=id, user=current_user):
+            # Only a paper that is still there is a real failure. A duplicate
+            # delete request loses the race against the one that got there
+            # first, and reporting that as an error would fail a request whose
+            # outcome — the paper is gone — is the one that was asked for.
+            return JSONResponse(
+                status_code=500, content={"message": "Failed to delete document"}
+            )
+
+        # Delete the file from S3 if s3_object_key exists
+        if s3_object_key:
+            s3_service.delete_file(str(s3_object_key))
+            logger.info(f"Deleted S3 object: {s3_object_key}")
+
+        return JSONResponse(status_code=200, content={"message": "Document deleted"})
+    except Exception as e:
+        logger.error(f"Error deleting document: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"message": f"Error deleting document: {str(e)}"},
+        )
+
+
+class ForkSharedPaperRequest(BaseModel):
+    share_id: str
+
+
+@paper_router.post("/fork")
+async def fork_shared_paper(
+    request: ForkSharedPaperRequest,
+    db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(get_required_user),
+) -> JSONResponse:
+    """
+    Fork a shared paper into the current user's library.
+    The paper must be publicly shared (via share_id).
+    """
+    try:
+        # Check subscription limits before forking
+        can_upload, error_message = can_user_upload_paper(db, current_user)
+        if not can_upload:
+            return JSONResponse(
+                status_code=403,
+                content={"message": error_message},
+            )
+
+        # Find the shared paper by share_id
+        shared_paper = paper_crud.get_public_paper(db, share_id=request.share_id)
+
+        if not shared_paper:
+            raise HTTPException(
+                status_code=404,
+                detail="Shared paper not found or is no longer public.",
+            )
+
+        # Skip fork if user is the original owner
+        if shared_paper.user_id == current_user.id:
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "message": "You already own this paper",
+                    "new_paper_id": str(shared_paper.id),
+                    "already_exists": True,
+                },
+            )
+
+        # Check if user already has a fork of this paper
+        existing_fork = paper_crud.get_forked_paper_by_parent_id(
+            db, parent_paper_id=uuid.UUID(str(shared_paper.id)), user=current_user
+        )
+        if existing_fork:
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "message": "You already have this paper in your library",
+                    "new_paper_id": str(existing_fork.id),
+                    "already_exists": True,
+                },
+            )
+
+        # Duplicate the file in S3
+        duplicate_paper_key, duplicate_file_url = s3_service.duplicate_file(
+            source_object_key=str(shared_paper.s3_object_key),
+            new_filename=f"forked_{uuid.uuid4()}.pdf",
+        )
+
+        # Duplicate the preview image if it exists
+        duplicate_preview_url = None
+        if shared_paper.preview_url:
+            _, duplicate_preview_url = s3_service.duplicate_file_from_url(
+                s3_url=str(shared_paper.preview_url),
+                new_filename=f"forked_preview_{uuid.uuid4()}.png",
+            )
+
+        # Fork the paper using paper_crud
+        new_paper = paper_crud.fork_paper(
+            db,
+            original_paper=shared_paper,
+            new_file_object_key=duplicate_paper_key,
+            new_file_url=duplicate_file_url,
+            new_preview_url=duplicate_preview_url,
+            current_user=current_user,
+        )
+
+        if not new_paper:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to fork paper.",
+            )
+
+        track_event(
+            "paper_forked_from_share",
+            user_id=str(current_user.id),
+            properties={
+                "share_id": request.share_id,
+                "original_paper_id": str(shared_paper.id),
+                "new_paper_id": str(new_paper.id),
+            },
+            db=db,
+        )
+
+        return JSONResponse(
+            status_code=201,
+            content={
+                "message": "Paper forked successfully",
+                "new_paper_id": str(new_paper.id),
+            },
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error forking shared paper: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=400,
+            content={"message": "Failed to fork shared paper"},
+        )

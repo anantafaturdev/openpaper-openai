@@ -1,0 +1,98 @@
+"use client";
+
+import { Clock, Loader2, CheckCircle, XCircle, AlertCircle } from "lucide-react";
+import { AudioOverviewJob } from "@/lib/schema";
+import { formatDateTime } from "./utils/paperUtils";
+
+interface AudioOverviewGenerationJobCardProps {
+    job: AudioOverviewJob;
+}
+
+const getStatusIcon = (status: string) => {
+    switch (status) {
+        case 'pending':
+            return <Clock className="w-4 h-4 text-yellow-600 dark:text-yellow-400" />;
+        case 'running':
+            return <Loader2 className="w-4 h-4 text-blue-600 dark:text-blue-400 animate-spin" />;
+        case 'completed':
+            return <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />;
+        case 'failed':
+            return <XCircle className="w-4 h-4 text-red-600 dark:text-red-400" />;
+        case 'cancelled':
+            return <AlertCircle className="w-4 h-4 text-muted-foreground" />;
+        default:
+            return <Clock className="w-4 h-4 text-muted-foreground" />;
+    }
+};
+
+const getStatusText = (status: string) => {
+    switch (status) {
+        case 'pending':
+            return 'Queued';
+        case 'running':
+            return 'Generating...';
+        case 'completed':
+            return 'Completed';
+        case 'failed':
+            return 'Failed';
+        case 'cancelled':
+            return 'Cancelled';
+        default:
+            return status.charAt(0).toUpperCase() + status.slice(1);
+    }
+};
+
+const getStatusColor = (status: string) => {
+    switch (status) {
+        case 'pending':
+            return 'text-yellow-600 dark:text-yellow-400';
+        case 'running':
+            return 'text-blue-600 dark:text-blue-400';
+        case 'completed':
+            return 'text-green-600 dark:text-green-400';
+        case 'failed':
+            return 'text-red-600 dark:text-red-400';
+        case 'cancelled':
+            return 'text-muted-foreground';
+        default:
+            return 'text-muted-foreground';
+    }
+};
+
+export default function AudioOverviewGenerationJobCard({ job }: AudioOverviewGenerationJobCardProps) {
+
+    return (
+        <div className="w-full rounded-lg border bg-card p-3 text-card-foreground">
+            <div className="flex items-start gap-2">
+                <div className="mt-0.5 flex-shrink-0">
+                    {getStatusIcon(job.status)}
+                </div>
+                <div className="flex-1 min-w-0">
+                    <h3 className="text-sm font-semibold mb-1">
+                        Creating Audio Overview
+                    </h3>
+                    <p className={`text-xs font-medium mb-1 ${getStatusColor(job.status)}`}>
+                        {job.status_message || getStatusText(job.status)}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                        {job.completed_at ? (
+                            <span>Completed at {formatDateTime(job.completed_at)}</span>
+                        ) : (
+                            <span>Started at {formatDateTime(job.started_at)}</span>
+                        )}
+                    </p>
+                    {job.status === 'running' && (
+                        <div className="mt-2">
+                            <div className="w-full bg-muted rounded-full h-1">
+                                <div className="bg-blue-500 h-1 rounded-full animate-pulse" style={{ width: '60%' }}></div>
+                            </div>
+                            <p className="text-xs text-muted-foreground mt-1">
+                                This may take a few minutes...
+                            </p>
+                        </div>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+}

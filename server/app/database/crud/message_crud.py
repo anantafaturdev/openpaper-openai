@@ -1,0 +1,297 @@
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
+from uuid import UUID
+
+from app.database.crud.base_crud import CRUDBase
+from app.database.crud.projects.project_chart_crud import chart_job_crud
+from app.database.crud.sanitization import sanitize_for_postgres
+from app.database.models import (
+    ConversableType,
+    Conversation,
+    Message,
+    Paper,
+    ProjectRole,
+)
+from app.schemas.user import CurrentUser
+from pydantic import BaseModel
+from sqlalchemy import desc, func
+from sqlalchemy.orm import Session
+
+
+class MessageBase(BaseModel):
+    conversation_id: UUID
+    role: str
+    content: str
+    references: Optional[Dict[str, Any]] = None
+    trace: Optional[Dict[str, Any]] = None
+    # Denormalized @-mention context snapshot: [{kind, id, title}].
+    scope: Optional[List[Dict[str, Any]]] = None
+
+
+class MessageCreate(MessageBase):
+    pass
+
+
+class MessageUpdate(BaseModel):
+    role: Optional[str] = None
+    content: Optional[str] = None
+    references: Optional[Dict[str, Any]] = None
+    trace: Optional[Dict[str, Any]] = None
+    scope: Optional[List[Dict[str, Any]]] = None
+
+
+class MessageCRUD(CRUDBase[Message, MessageCreate, MessageUpdate]):
+    """CRUD operations specifically for Message model"""
+
+    def create(
+        self, db: Session, *, obj_in: MessageCreate, user: CurrentUser
+    ) -> Message:
+        """Create a new message with auto-incrementing sequence number"""
+        # Get the next sequence number for this conversation
+        max_sequence = (
+            db.query(func.max(Message.sequence))
+            .filter(
+                Message.conversation_id == obj_in.conversation_id,
+                Message.user_id == user.id,
+            )
+            .scalar()
+        )
+        next_sequence = (max_sequence or 0) + 1
+
+        # Convert Pydantic model to dict and add sequence. Strip NUL (0x00)
+        # characters that PostgreSQL cannot store — message content/references
+        # are derived from extracted PDF text, which can contain them. This
+        # mirrors the sanitization base_crud applies; without it, a NUL byte
+        # fails the flush and poisons the shared session.
+        obj_in_data = sanitize_for_postgres(obj_in.model_dump(exclude_unset=True))
+        db_obj = Message(**obj_in_data, sequence=next_sequence, user_id=user.id)
+
+        try:
+            db.add(db_obj)
+            db.commit()
+            db.refresh(db_obj)
+        except Exception:
+            # Roll back so a failed flush doesn't leave the session in a
+            # PendingRollbackError state for every later operation.
+            db.rollback()
+            raise
+        return db_obj
+
+    def get_conversation_messages(
+        self,
+        db: Session,
+        *,
+        conversation_id: UUID,
+        current_user: CurrentUser,
+        page: int = 1,
+        page_size: int = 10
+    ) -> list[Message]:
+        """
+        Get messages for a conversation:
+        1. Order by sequence DESC for correct pagination (most recent first)
+        2. Apply offset and limit
+        3. Reverse final results for chronological display
+        """
+        messages = (
+            db.query(Message)
+            .filter(
+                Message.conversation_id == conversation_id,
+                Message.user_id == current_user.id,
+            )
+            .order_by(desc(Message.sequence))  # newest first for pagination
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+            .all()
+        )
+
+        # Reverse the results to get chronological order
+        return list(reversed(messages))
+
+    def get_project_conversation_messages(
+        self,
+        db: Session,
+        *,
+        conversation_id: UUID,
+        project_id: UUID,
+        current_user: CurrentUser,
+        page: int = 1,
+        page_size: int = 10
+    ) -> list[Message]:
+        """
+        Get messages for a project conversation:
+        1. Order by sequence DESC for correct pagination (most recent first)
+        2. Apply offset and limit
+        3. Reverse final results for chronological display
+        """
+        # First, check if the user has access to the project.
+        project_role = (
+            db.query(ProjectRole)
+            .filter(
+                ProjectRole.project_id == project_id,
+                ProjectRole.user_id == current_user.id,
+            )
+            .first()
+        )
+        if not project_role:
+            return []
+
+        # Ensure that the target conversation belongs to the project
+        conversation = (
+            db.query(Conversation)
+            .filter(
+                Conversation.id == conversation_id,
+                Conversation.conversable_id == project_id,
+                Conversation.conversable_type == ConversableType.PROJECT,
+            )
+            .first()
+        )
+
+        if not conversation:
+            return []
+
+        messages = (
+            db.query(Message)
+            .filter(
+                Message.conversation_id == conversation_id,
+            )
+            .order_by(desc(Message.sequence))  # newest first for pagination
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+            .all()
+        )
+
+        # Reverse the results to get chronological order
+        return list(reversed(messages))
+
+    def get_shared_conversation_messages(
+        self,
+        db: Session,
+        *,
+        conversation_id: UUID,
+        share_paper_id: str,
+        page: int = 1,
+        page_size: int = 10
+    ) -> list[Message]:
+        """
+        Get messages for a shared conversation:
+        1. Order by sequence DESC for correct pagination (most recent first)
+        2. Apply offset and limit
+        3. Reverse final results for chronological display
+        """
+        # First, let's verify the conversation exists and get its details
+        conversation = (
+            db.query(Conversation).filter(Conversation.id == conversation_id).first()
+        )
+        if not conversation:
+            return []
+
+        # Check if there's a paper with the given share_id
+        paper = db.query(Paper).filter(Paper.share_id == share_paper_id).first()
+        if not paper:
+            return []
+
+        # Verify the relationship between conversation and paper
+        if conversation.conversable_id != paper.id:
+            return []
+
+        messages = (
+            db.query(Message)
+            .filter(
+                Message.conversation_id == conversation_id,
+                # Remove the joins and just check the conversation directly
+            )
+            .order_by(desc(Message.sequence))  # newest first for pagination
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+            .all()
+        )
+
+        # Reverse the results to get chronological order
+        return list(reversed(messages))
+
+    def messages_to_dict(self, messages: list[Message]) -> list[Dict[str, Any]]:
+        """
+        Convert a list of Message objects to a list of dictionaries
+        """
+
+        formatted_messages = []
+        for message in messages:
+            message_dict = {
+                "id": str(message.id),
+                "role": message.role,
+                "content": message.content,
+                "references": message.references,
+                # The charts this turn asked for, sent alongside the artifacts
+                # rather than instead of them: a completed job carries the same
+                # artifact that is also attached to the message, and each
+                # surface picks which of the two draws it. Both being sent is
+                # what lets the card that was pending on the last load be a
+                # chart on this one.
+                "chart_jobs": [
+                    chart_job_crud.to_dict(job)
+                    for job in list(message.chart_jobs or [])  # type: ignore[arg-type]
+                ]
+                or None,
+                # The artifact's own id rides along with its payload so the
+                # conversation can link each card to its viewer page — and so a
+                # chart already drawn by its job card can be recognised here and
+                # left out. It is assigned on persistence, so a still-streaming
+                # card has none.
+                "artifacts": [
+                    {**a.to_payload(), "artifact_id": str(a.id)}
+                    for a in message.artifacts
+                ]
+                or None,
+                "trace": message.trace,
+                "scope": message.scope,
+                "sequence": message.sequence,
+            }
+            formatted_messages.append(message_dict)
+        return formatted_messages
+
+    def resequence_messages(
+        self,
+        db: Session,
+        *,
+        conversation_id: UUID,
+        current_user: CurrentUser,
+        gap: int = 10
+    ) -> None:
+        """
+        Resequence all messages in a conversation with specified gaps
+        Useful when needing to insert messages between existing ones
+        """
+        messages = self.get_conversation_messages(
+            db, conversation_id=conversation_id, current_user=current_user
+        )
+        for i, message in enumerate(messages):
+            message.sequence = (i + 1) * gap  # type: ignore
+        db.commit()
+
+    def get_chat_credits_used_this_week(
+        self, db: Session, *, current_user: CurrentUser
+    ) -> int:
+        """
+        Get the number of chat credits used by the user this week.
+        """
+        # Start from the nearest Monday at 00:00 UTC
+        start_of_week = datetime.now(timezone.utc) - timedelta(
+            days=datetime.now(timezone.utc).weekday()
+        )
+        start_of_week = start_of_week.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_of_week = start_of_week + timedelta(days=7)
+        # We'll define a `chat credit` as being equal to the value of 5 characters processed. To compute, we take the length of the content of each message and divide by 5.
+        return (
+            db.query(func.sum(func.length(Message.content)) / 5)
+            .filter(
+                Message.user_id == current_user.id,
+                Message.created_at >= start_of_week,
+                Message.created_at < end_of_week,
+            )
+            .scalar()
+            or 0
+        )
+
+
+# Create a single instance to use throughout the application
+message_crud = MessageCRUD(Message)

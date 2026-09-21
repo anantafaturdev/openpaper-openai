@@ -1,0 +1,264 @@
+"use client";
+
+import { useState, useEffect, useCallback } from "react";
+import { Clock, Loader2, CheckCircle, XCircle, AlertCircle, Table, ChevronDown, ChevronUp, RefreshCw } from "lucide-react";
+import { DataTableJob, DataTableJobStatusResponse, JobStatus } from "@/lib/schema";
+import { formatDateTime } from "./utils/paperUtils";
+import { fetchFromApi } from "@/lib/api";
+import Link from "next/link";
+
+interface DataTableGenerationJobCardProps {
+    job: DataTableJob;
+    projectId: string;
+}
+
+const getStatusIcon = (status: JobStatus) => {
+    switch (status) {
+        case JobStatus.PENDING:
+            return <Clock className="w-4 h-4 text-yellow-600 dark:text-yellow-400" />;
+        case JobStatus.RUNNING:
+            return <Loader2 className="w-4 h-4 text-blue-600 dark:text-blue-400 animate-spin" />;
+        case JobStatus.COMPLETED:
+            return <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />;
+        case JobStatus.FAILED:
+            return <XCircle className="w-4 h-4 text-red-600 dark:text-red-400" />;
+        case JobStatus.CANCELLED:
+            return <AlertCircle className="w-4 h-4 text-muted-foreground" />;
+        default:
+            return <Clock className="w-4 h-4 text-muted-foreground" />;
+    }
+};
+
+const getStatusText = (status: JobStatus) => {
+    switch (status) {
+        case JobStatus.PENDING:
+            return 'Queued';
+        case JobStatus.RUNNING:
+            return 'Generating...';
+        case JobStatus.COMPLETED:
+            return 'Completed';
+        case JobStatus.FAILED:
+            return 'Failed';
+        case JobStatus.CANCELLED:
+            return 'Cancelled';
+        default: {
+            // Defensive fallback for an unexpected status string from the backend.
+            // The union is exhaustive, so `status` narrows to `never` here.
+            const fallback = status as string;
+            return fallback.charAt(0).toUpperCase() + fallback.slice(1);
+        }
+    }
+};
+
+const formatDuration = (start?: string | null, end?: string | null) => {
+    if (!start || !end) return null;
+    const ms = new Date(end).getTime() - new Date(start).getTime();
+    if (!Number.isFinite(ms) || ms <= 0) return null;
+    const mins = Math.round(ms / 60000);
+    if (mins < 1) return 'under a minute';
+    if (mins < 60) return `${mins} min`;
+    return `${Math.floor(mins / 60)}h ${mins % 60}m`;
+};
+
+const getStatusColor = (status: JobStatus) => {
+    switch (status) {
+        case JobStatus.PENDING:
+            return 'text-yellow-600 dark:text-yellow-400';
+        case JobStatus.RUNNING:
+            return 'text-blue-600 dark:text-blue-400';
+        case JobStatus.COMPLETED:
+            return 'text-green-600 dark:text-green-400';
+        case JobStatus.FAILED:
+            return 'text-red-600 dark:text-red-400';
+        case JobStatus.CANCELLED:
+            return 'text-muted-foreground';
+        default:
+            return 'text-muted-foreground';
+    }
+};
+
+export default function DataTableGenerationJobCard({ job, projectId }: DataTableGenerationJobCardProps) {
+    const [isExpanded, setIsExpanded] = useState(false);
+    const [liveData, setLiveData] = useState<DataTableJobStatusResponse | null>(null);
+    const [isLoading, setIsLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+
+    const fetchLiveData = useCallback(async () => {
+        setIsLoading(true);
+        setError(null);
+        try {
+            const data = await fetchFromApi(`/api/projects/tables/${job.id}`);
+            setLiveData(data);
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Failed to fetch job status');
+        } finally {
+            setIsLoading(false);
+        }
+    }, [job.id]);
+
+    useEffect(() => {
+        if (isExpanded && !liveData) {
+            fetchLiveData();
+        }
+    }, [isExpanded, liveData, fetchLiveData]);
+
+    // Poll for updates if job is running
+    useEffect(() => {
+        if (!isExpanded) return;
+
+        const currentStatus = liveData?.status ?? job.status;
+        if (currentStatus !== JobStatus.RUNNING && currentStatus !== JobStatus.PENDING) return;
+
+        const interval = setInterval(fetchLiveData, 5000);
+        return () => clearInterval(interval);
+    }, [isExpanded, liveData?.status, job.status, fetchLiveData]);
+
+    const currentStatus = liveData?.status ?? job.status;
+    const isCompleted = currentStatus === JobStatus.COMPLETED && job.result_id;
+
+    const handleCardClick = (e: React.MouseEvent) => {
+        // Don't toggle if clicking on the link
+        if ((e.target as HTMLElement).closest('a')) return;
+        setIsExpanded(!isExpanded);
+    };
+
+    const CardContent = () => (
+        <div className="w-full rounded-lg border bg-card p-3 text-card-foreground cursor-pointer transition-colors hover:bg-accent/40">
+            <div className="flex items-start gap-2">
+                <div className="mt-0.5 flex-shrink-0">
+                    {currentStatus === JobStatus.COMPLETED ? <Table className="w-4 h-4 text-blue-600 dark:text-blue-400" /> : getStatusIcon(currentStatus)}
+                </div>
+                <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between">
+                        {isCompleted && job.result_id ? (
+                            <Link
+                                href={`/projects/${projectId}/tables/${job.result_id}`}
+                                onClick={(e) => e.stopPropagation()}
+                                className="text-sm font-semibold hover:underline mb-1"
+                            >
+                                {job.title || 'Data Table'}
+                            </Link>
+                        ) : (
+                            <h3 className="text-sm font-semibold mb-1">
+                                {job.title || 'Creating Data Table'}
+                            </h3>
+                        )}
+                        <div className="flex items-center gap-2">
+                            {isExpanded && (
+                                <button
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        fetchLiveData();
+                                    }}
+                                    className="p-1 hover:bg-muted rounded"
+                                    title="Refresh status"
+                                >
+                                    <RefreshCw className={`w-4 h-4 text-muted-foreground ${isLoading ? 'animate-spin' : ''}`} />
+                                </button>
+                            )}
+                            {isExpanded ? (
+                                <ChevronUp className="w-4 h-4 text-muted-foreground" />
+                            ) : (
+                                <ChevronDown className="w-4 h-4 text-muted-foreground" />
+                            )}
+                        </div>
+                    </div>
+                    {currentStatus !== JobStatus.COMPLETED && (
+                        <p className={`text-xs font-medium mb-1 ${getStatusColor(currentStatus)}`}>
+                            {getStatusText(currentStatus)}
+                        </p>
+                    )}
+                    {job.created_at && (
+                        <p className="text-xs text-muted-foreground">
+                            <span>{formatDateTime(job.created_at)}</span>
+                        </p>
+                    )}
+                    {currentStatus === JobStatus.RUNNING && (
+                        <div className="mt-2">
+                            <div className="w-full bg-muted rounded-full h-1">
+                                <div className="bg-blue-500 h-1 rounded-full animate-pulse" style={{ width: '60%' }}></div>
+                            </div>
+                            <p className="text-xs text-muted-foreground mt-1">
+                                This may take a few minutes...
+                            </p>
+                        </div>
+                    )}
+
+                    {/* Expanded details */}
+                    {isExpanded && (
+                        <div className="mt-3 space-y-2">
+                            {error && (
+                                <p className="text-xs text-red-500">{error}</p>
+                            )}
+
+                            {liveData && (
+                                <>
+                                    <p className="text-xs">
+                                        <span className={`font-medium ${getStatusColor(liveData.status)}`}>
+                                            {getStatusText(liveData.status)}
+                                        </span>
+                                        {liveData.completed_at && (
+                                            <span className="text-muted-foreground">
+                                                {' '}{formatDateTime(liveData.completed_at)}
+                                                {formatDuration(job.created_at, liveData.completed_at) &&
+                                                    ` · took ${formatDuration(job.created_at, liveData.completed_at)}`}
+                                            </span>
+                                        )}
+                                    </p>
+
+                                    {liveData.celery_progress_message && currentStatus !== JobStatus.COMPLETED && (
+                                        <p className="text-xs text-muted-foreground bg-muted p-2 rounded">
+                                            {liveData.celery_progress_message}
+                                        </p>
+                                    )}
+
+                                    {liveData.columns && liveData.columns.length > 0 && (
+                                        <div className="flex flex-wrap gap-1 text-xs">
+                                            {liveData.columns.map((col, idx) => (
+                                                <span
+                                                    key={idx}
+                                                    className="px-2 py-0.5 bg-muted rounded text-muted-foreground"
+                                                >
+                                                    {col}
+                                                </span>
+                                            ))}
+                                        </div>
+                                    )}
+
+                                    {liveData.error_message && (
+                                        <p className="text-xs text-red-600 dark:text-red-300 bg-red-50 dark:bg-red-900/20 p-2 rounded">
+                                            {liveData.error_message}
+                                        </p>
+                                    )}
+
+                                    {isCompleted && job.result_id && (
+                                        <Link
+                                            href={`/projects/${projectId}/tables/${job.result_id}`}
+                                            className="inline-block mt-2 text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                                            onClick={(e) => e.stopPropagation()}
+                                        >
+                                            View Table →
+                                        </Link>
+                                    )}
+                                </>
+                            )}
+
+                            {isLoading && !liveData && (
+                                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                    Loading job details...
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+
+    return (
+        <div onClick={handleCardClick}>
+            <CardContent />
+        </div>
+    );
+}

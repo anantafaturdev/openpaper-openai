@@ -1,0 +1,76 @@
+"""
+Celery application configuration and setup.
+"""
+import os
+from datetime import timedelta
+
+from dotenv import load_dotenv
+from celery import Celery # type: ignore
+from celery.signals import setup_logging # type: ignore
+
+from src.logging_config import configure_logging
+
+load_dotenv()  # Load environment variables from .env file
+
+
+@setup_logging.connect
+def configure_celery_logging(**_kwargs):
+    """Connecting here makes Celery skip its own log config entirely, so the
+    worker, Beat and task records go out in the same format as the jobs API."""
+    configure_logging()
+
+
+BROKER_URL = os.getenv("CELERY_BROKER_URL", "pyamqp://guest@localhost:5672//")
+BACKEND_URL = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/0")
+
+# Create Celery instance
+celery_app = Celery(
+    "openpaper_tasks",
+    broker=BROKER_URL,
+    backend=BACKEND_URL,
+    include=["src.tasks"]
+)
+
+# Celery configuration
+celery_app.conf.update(
+    task_serializer="json",
+    accept_content=["json"],
+    result_serializer="json",
+    timezone="UTC",
+    enable_utc=True,
+    result_expires=3600,  # Results expire after 1 hour
+    task_routes={
+        "upload_and_process_file": {"queue": "pdf_processing"},
+        "delayed_referral_settlement_callback": {"queue": "user_processing"},
+        "periodic_zotero_sync": {"queue": "zotero_sync"},
+    },
+    worker_prefetch_multiplier=1,  # Process one task at a time
+    task_acks_late=True,
+    reject_on_worker_lost=True,
+    task_acks_on_failure_or_timeout=True,
+    worker_max_tasks_per_child=1000,
+    # Health monitoring settings
+    worker_send_task_events=True,
+    task_send_sent_event=True,
+    # Worker heartbeat and timeout settings
+    broker_heartbeat=30,
+    broker_heartbeat_checkrate=2.0,
+    worker_disable_rate_limits=True,
+    # Memory and resource limits
+    worker_max_memory_per_child=500000,  # 500MB in KB
+)
+
+celery_app.autodiscover_tasks()
+
+ZOTERO_SYNC_INTERVAL_SECONDS = (24 * 60 * 60)  # Default to 24 hours
+
+celery_app.conf.beat_schedule = {
+    "periodic-zotero-sync": {
+        "task": "periodic_zotero_sync",
+        "schedule": timedelta(seconds=ZOTERO_SYNC_INTERVAL_SECONDS),
+        "options": {"queue": "zotero_sync"},
+    },
+}
+
+if __name__ == "__main__":
+    celery_app.start()

@@ -1,0 +1,163 @@
+"use client";
+
+import { Loader2, Pause, Play, Volume2, RotateCcw } from "lucide-react";
+import { AudioOverview } from "@/lib/schema";
+import { AudioProgress } from "@/hooks/useAudioPlayback";
+
+interface AudioOverviewCardProps {
+    overview: AudioOverview;
+    isPlaying: boolean;
+    isLoading: boolean;
+    isActivated: boolean;
+    progress: AudioProgress | undefined;
+    volume: number;
+    speed: number;
+    progressPercentage: number;
+    onPlayPause: () => void;
+    onSeek: (percentage: number) => void;
+    onVolumeChange: (volume: number) => void;
+    onSpeedChange: (speed: number) => void;
+    onSkipBackward: () => void;
+    onSkipForward: () => void;
+    formatTime: (time: number) => string;
+    // Opens the transcript view (center pane) — replaces the old dialog.
+    onOpenTranscript: () => void;
+}
+
+export default function AudioOverviewCard({
+    overview,
+    isPlaying,
+    isLoading,
+    isActivated,
+    progress,
+    volume,
+    speed,
+    progressPercentage,
+    onPlayPause,
+    onSeek,
+    onVolumeChange,
+    onSpeedChange,
+    onSkipBackward,
+    onSkipForward,
+    formatTime,
+    onOpenTranscript,
+}: AudioOverviewCardProps) {
+    return (
+        <div className="w-full rounded-lg border bg-card p-3 text-card-foreground">
+            <div className="flex items-start gap-2 mb-3">
+                {/* The play control keeps a filled shape because it is the one
+                    thing here you act on; the accent rides the icon, not a block. */}
+                <button
+                    onClick={onPlayPause}
+                    className="flex-shrink-0 rounded-md bg-muted p-1.5 transition-colors hover:bg-accent"
+                    aria-label={isPlaying ? "Pause audio overview" : "Play audio overview"}
+                >
+                    {isLoading ? (
+                        <Loader2 className="w-4 h-4 text-blue-600 dark:text-blue-400 animate-spin" />
+                    ) : isPlaying ? (
+                        <Pause className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                    ) : (
+                        <Play className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                    )}
+                </button>
+                <div className="flex-1 min-w-0">
+                    <h3 className="text-sm font-semibold mb-1">
+                        {overview.title || 'Audio Overview'}
+                    </h3>
+                    <p className="text-xs text-muted-foreground mb-2">
+                        Created {new Date(overview.created_at).toLocaleDateString()}
+                    </p>
+                    {overview.transcript && (
+                        <button
+                            onClick={onOpenTranscript}
+                            className="text-xs text-muted-foreground line-clamp-2 text-left hover:text-foreground transition-colors"
+                        >
+                            {overview.transcript}
+                        </button>
+                    )}
+                </div>
+            </div>
+
+            {isActivated && (
+                <>
+                    {/* Progress Bar */}
+                    <div className="mb-3">
+                        <div className="flex items-center justify-between text-xs text-muted-foreground mb-1">
+                            <span>{progress ? formatTime(progress.currentTime) : '0:00'}</span>
+                            <span>{progress ? formatTime(progress.duration) : '0:00'}</span>
+                        </div>
+                        <div className="relative">
+                            <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
+                                <div
+                                    className="h-full bg-blue-500 transition-all duration-100"
+                                    style={{ width: `${progressPercentage}%` }}
+                                />
+                            </div>
+                            <input
+                                type="range"
+                                min="0"
+                                max="100"
+                                value={progressPercentage}
+                                onChange={(e) => onSeek(Number(e.target.value))}
+                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                            />
+                        </div>
+                    </div>
+
+                    {/* Controls */}
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-2">
+                            <button
+                                onClick={onSkipBackward}
+                                className="p-1 text-muted-foreground hover:text-foreground transition-colors"
+                                title="Skip back 10s"
+                            >
+                                <RotateCcw className="w-4 h-4" />
+                            </button>
+                            <button
+                                onClick={onSkipForward}
+                                className="p-1 text-muted-foreground hover:text-foreground transition-colors"
+                                title="Skip forward 10s"
+                            >
+                                <RotateCcw className="w-4 h-4 scale-x-[-1]" />
+                            </button>
+                        </div>
+
+                        <div className="flex items-center space-x-3">
+                            {/* Volume Control */}
+                            <div className="flex items-center space-x-1">
+                                <Volume2 className="w-3 h-3 text-muted-foreground" />
+                                <input
+                                    type="range"
+                                    min="0"
+                                    max="1"
+                                    step="0.01"
+                                    value={volume}
+                                    onChange={(e) => onVolumeChange(Number(e.target.value))}
+                                    className="w-16 h-1 bg-muted rounded-lg appearance-none cursor-pointer"
+                                />
+                            </div>
+
+                            {/* Speed Control */}
+                            <div className="flex space-x-1">
+                                {[0.75, 1, 1.25, 1.5, 2].map((speedOption) => (
+                                    <button
+                                        key={speedOption}
+                                        onClick={() => onSpeedChange(speedOption)}
+                                        className={`px-2 py-1 text-xs rounded ${
+                                            speed === speedOption
+                                                ? 'bg-foreground text-background'
+                                                : 'bg-muted text-muted-foreground hover:text-foreground'
+                                        } transition-colors`}
+                                    >
+                                        {speedOption}x
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                </>
+            )}
+        </div>
+    );
+}

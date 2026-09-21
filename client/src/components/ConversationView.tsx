@@ -1,0 +1,654 @@
+"use client";
+
+import { FormEvent, useCallback, useRef, useState, useEffect } from "react";
+import { useIsMobile } from "@/lib/useMobile";
+import { AnimatedMarkdown, CopyableTable } from "@/components/AnimatedMarkdown";
+import { Button } from "@/components/ui/button";
+import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import rehypeKatex from "rehype-katex";
+import remarkMath from "remark-math";
+import "katex/dist/katex.min.css";
+import { Loader, Recycle, X, ChevronDown, ChevronUp, BookOpen } from "lucide-react";
+import CustomCitationLink from "@/components/utils/CustomCitationLink";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogHeader,
+	DialogTitle,
+} from "@/components/ui/dialog";
+import { ChatMessageActions } from "@/components/ChatMessageActions";
+import { ChatMessage, Reference, PaperItem, ChatArtifact, ChartGenerationJob, Project } from "@/lib/schema";
+import { MentionInput } from "@/components/chat/MentionInput";
+import {
+	MentionContextBar,
+	MentionSelection,
+	EMPTY_MENTION_SELECTION,
+	scopeItemsToEntities,
+} from "@/components/chat/MentionAutocomplete";
+import ReferencePaperCards from "@/components/ReferencePaperCards";
+import { ChatArtifactCards, chartViewerHrefs } from "@/components/ChatArtifactCards";
+import { ChatChartJobs } from "@/components/ChatChartJobs";
+import { MessageTraceViewer } from "@/components/MessageTraceViewer";
+import Link from "next/link";
+import { TopicBubbles } from "@/components/TopicBubbles";
+import { AnimatedGradientText } from "@/components/magicui/animated-gradient-text";
+import { ChatHistorySkeleton } from "@/components/ChatHistorySkeleton";
+import { PdfHighlighterViewer } from "@/components/PdfHighlighterViewer";
+
+/** A turn's own artifact cards, minus any chart its job card already draws.
+ *
+ * A chart raised from chat ends up attached to the message as well as owned by
+ * its job, because the finished artifact belongs to the turn that asked for it.
+ * That leaves two routes to the same card, and both were being taken. The job
+ * card wins here: it is the placeholder the user has been watching, and it is
+ * the one that fills in the moment the poll reports the chart done — the
+ * message's copy only arrives on the next load. */
+function MessageArtifactCards({ msg, projectId, onOpenPaper }: {
+	msg: ChatMessage;
+	projectId?: string;
+	onOpenPaper: (paperId: string, searchTerm?: string) => void;
+}) {
+	const claimedByJob = new Set(
+		(msg.chart_jobs ?? [])
+			.map((job) => job.artifact_id)
+			.filter((id): id is string => Boolean(id)),
+	);
+	const artifacts = (msg.artifacts ?? []).filter(
+		(artifact) =>
+			artifact.kind !== "chart" ||
+			!artifact.artifact_id ||
+			!claimedByJob.has(artifact.artifact_id),
+	);
+	if (artifacts.length === 0) return null;
+	return (
+		<ChatArtifactCards
+			artifacts={artifacts}
+			onOpenPaper={onOpenPaper}
+			chartDetailHrefs={chartViewerHrefs(artifacts, projectId)}
+		/>
+	);
+}
+
+interface ConversationViewProps {
+	messages: ChatMessage[];
+	isOwner: boolean;
+	papers: PaperItem[];
+	isPapersLoading?: boolean;
+	isStreaming: boolean;
+	streamingChunks: string[];
+	streamingReferences?: Reference;
+	streamingArtifacts?: ChatArtifact[];
+	streamingChartJobs?: ChartGenerationJob[];
+	statusMessage: string;
+	error: string | null;
+	isSessionLoading: boolean;
+	chatCreditLimitReached: boolean;
+	currentMessage: string;
+	onCurrentMessageChange: (message: string) => void;
+	onSubmit: (e?: FormEvent) => Promise<void>;
+	onRetry: () => void;
+	isCentered: boolean;
+	setIsCentered: (isCentered: boolean) => void;
+	displayedText: string;
+	isTyping: boolean;
+	handleCitationClick: (key: string, messageIndex: number) => void;
+	highlightedInfo: { paperId: string; messageIndex: number } | null;
+	setHighlightedInfo: (info: { paperId: string; messageIndex: number } | null) => void;
+	authLoading: boolean;
+	onRefreshPaperUrl?: (paperId: string) => Promise<string | null>;
+	// When provided, papers open in the caller's reader (e.g. the project
+	// workspace panel) instead of this view's private side-by-side PDF split.
+	onOpenPaperExternal?: (paper: PaperItem, searchText: string | null) => void;
+	// @-mention scoping (optional). When onMentionSelectionChange is provided,
+	// the input gains a Google-Docs-style "@" dropdown for scoping the chat to
+	// specific papers/projects.
+	projects?: Project[];
+	mentionSelection?: MentionSelection;
+	onMentionSelectionChange?: (selection: MentionSelection) => void;
+	// Project chat scopes mentions to papers only (no projects/highlights).
+	mentionPapersOnly?: boolean;
+	// Lets a chart card link to its viewer page. Everything-mode chat has no
+	// project to hang that route off, so its cards stay unlinked.
+	projectId?: string;
+}
+
+export const ConversationView = ({
+	messages,
+	isOwner,
+	papers,
+	isPapersLoading = false,
+	isStreaming,
+	streamingChunks,
+	streamingReferences,
+	streamingArtifacts,
+	streamingChartJobs,
+	statusMessage,
+	error,
+	isSessionLoading,
+	chatCreditLimitReached,
+	currentMessage,
+	onCurrentMessageChange,
+	onSubmit,
+	onRetry,
+	isCentered,
+	setIsCentered,
+	displayedText,
+	isTyping,
+	handleCitationClick: originalHandleCitationClick,
+	highlightedInfo,
+	setHighlightedInfo,
+	authLoading,
+	onRefreshPaperUrl,
+	onOpenPaperExternal,
+	projects = [],
+	mentionSelection = EMPTY_MENTION_SELECTION,
+	onMentionSelectionChange,
+	mentionPapersOnly = false,
+	projectId,
+}: ConversationViewProps) => {
+	const messagesContainerRef = useRef<HTMLDivElement>(null);
+	const messagesEndRef = useRef<HTMLDivElement>(null);
+	const inputMessageRef = useRef<HTMLTextAreaElement>(null);
+	const chatInputFormRef = useRef<HTMLFormElement>(null);
+
+	const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+	const [pdfTitle, setPdfTitle] = useState<string | null>(null);
+	const [activePaperId, setActivePaperId] = useState<string | null>(null);
+	const [searchTerm, setSearchTerm] = useState<string | null>(null);
+	const [isPdfVisible, setIsPdfVisible] = useState(false);
+	const [collapsedReferences, setCollapsedReferences] = useState<Set<number>>(new Set());
+	const isMobile = useIsMobile();
+
+	const [statusMessageHistory, setStatusMessageHistory] = useState<{ message: string; startTime: number }[]>([]);
+	const [elapsedTime, setElapsedTime] = useState(0);
+	const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+
+	useEffect(() => {
+		if (statusMessage && (statusMessageHistory.length === 0 || statusMessageHistory[statusMessageHistory.length - 1].message !== statusMessage)) {
+			setStatusMessageHistory(prev => [...prev, { message: statusMessage, startTime: Date.now() }]);
+		}
+	}, [statusMessage, statusMessageHistory]);
+
+	useEffect(() => {
+		if (!isStreaming) {
+			setStatusMessageHistory([]);
+			setIsHistoryOpen(false);
+		}
+	}, [isStreaming]);
+
+	useEffect(() => {
+		let interval: NodeJS.Timeout | undefined;
+		if (isStreaming && statusMessageHistory.length > 0) {
+			const updateElapsedTime = () => {
+				const firstStatus = statusMessageHistory[0];
+				if (firstStatus) {
+					setElapsedTime(Math.floor((Date.now() - firstStatus.startTime) / 1000));
+				}
+			};
+			updateElapsedTime();
+			interval = setInterval(updateElapsedTime, 1000);
+		} else {
+			setElapsedTime(0);
+		}
+		return () => {
+			if (interval) clearInterval(interval);
+		};
+	}, [isStreaming, statusMessageHistory]);
+
+	// Open a paper in the PDF panel. file_url is loaded lazily, so it may be
+	// absent on the paper — fetch a fresh one on demand when that's the case.
+	const openPaperPdf = useCallback(async (paper: PaperItem, searchText: string | null) => {
+		if (onOpenPaperExternal) {
+			onOpenPaperExternal(paper, searchText);
+			return;
+		}
+		setActivePaperId(paper.id);
+		setPdfTitle(paper.title);
+		setSearchTerm(searchText);
+		setIsPdfVisible(true);
+
+		if (paper.file_url) {
+			setPdfUrl(paper.file_url);
+			return;
+		}
+
+		// Clear any stale PDF from a previously opened paper while we fetch.
+		setPdfUrl(null);
+		if (onRefreshPaperUrl) {
+			const freshUrl = await onRefreshPaperUrl(paper.id);
+			if (freshUrl) {
+				setPdfUrl(freshUrl);
+			}
+		}
+	}, [onRefreshPaperUrl, onOpenPaperExternal]);
+
+	const openArtifactPaper = useCallback((paperId: string, searchText?: string) => {
+		const paper = papers.find((candidate) => candidate.id === paperId);
+		if (paper) openPaperPdf(paper, searchText ?? null);
+	}, [openPaperPdf, papers]);
+
+	const handleCitationClick = (key: string, messageIndex: number) => {
+		originalHandleCitationClick(key, messageIndex);
+		const message = messages[messageIndex];
+		if (!message || !message.references) return;
+
+		const citation = message.references.citations.find(c => String(c.key) === key);
+		if (!citation) return;
+
+		const paper = papers.find(p => p.id === citation.paper_id);
+		if (!paper) return;
+
+		// Strip quotes from the reference if wrapped in them
+		let searchText = citation.reference;
+		if ((searchText.startsWith('"') && searchText.endsWith('"')) ||
+			(searchText.startsWith("'") && searchText.endsWith("'"))) {
+			searchText = searchText.substring(1, searchText.length - 1);
+		}
+		openPaperPdf(paper, searchText);
+	};
+
+	const refreshPdfUrl = useCallback(async (): Promise<string | null> => {
+		if (!activePaperId || !onRefreshPaperUrl) return null;
+		const freshUrl = await onRefreshPaperUrl(activePaperId);
+		if (freshUrl) {
+			setPdfUrl(freshUrl);
+		}
+		return freshUrl;
+	}, [activePaperId, onRefreshPaperUrl]);
+
+	const toggleReferences = useCallback((messageIndex: number) => {
+		setCollapsedReferences((prev: Set<number>) => {
+			const newSet = new Set(prev);
+			if (newSet.has(messageIndex)) {
+				newSet.delete(messageIndex);
+			} else {
+				newSet.add(messageIndex);
+			}
+			return newSet;
+		});
+	}, []);
+
+	const handleNewSubmit = useCallback(
+		(e?: FormEvent) => {
+			if (e) {
+				e.preventDefault();
+			}
+			if (isCentered) {
+				setIsCentered(false);
+			}
+			onSubmit();
+		},
+		[isCentered, onSubmit, setIsCentered]
+	);
+
+	const memoizedMessages = messages.map((msg, index) => (
+		<div
+			key={`${msg.id || `msg-${index}`}-${msg.role}`} // Use a stable and unique key
+			className="flex flex-col transition-all duration-300 ease-in-out"
+		>
+			<div className="flex flex-row gap-2 items-end">
+			<div
+				data-message-index={index}
+				className={`relative group prose dark:prose-invert max-w-full! transition-all duration-300 ease-in-out ${msg.role === "user"
+					? "text-base w-fit animate-fade-in line-clamp-3 bg-linear-to-r from-blue-50 to-indigo-50 dark:from-gray-700 dark:to-gray-600 px-3 py-1.5 rounded-xl border border-blue-100 dark:border-gray-600"
+					: "w-full text-primary"
+					}`}
+			>
+				{msg.role === "assistant" && <MessageTraceViewer trace={msg.trace} />}
+				<Markdown
+					remarkPlugins={[[remarkMath, { singleDollarTextMath: false }], remarkGfm]}
+					rehypePlugins={[rehypeKatex]}
+					components={{
+						p: (props) => (
+							<CustomCitationLink
+								{...props}
+								handleCitationClick={handleCitationClick}
+								messageIndex={index}
+								citations={msg.references?.citations || []}
+								papers={papers}
+							/>
+						),
+						li: (props) => (
+							<CustomCitationLink
+								{...props}
+								handleCitationClick={handleCitationClick}
+								messageIndex={index}
+								citations={msg.references?.citations || []}
+								papers={papers}
+							/>
+						),
+						div: (props) => (
+							<CustomCitationLink
+								{...props}
+								handleCitationClick={handleCitationClick}
+								messageIndex={index}
+								citations={msg.references?.citations || []}
+								papers={papers}
+							/>
+						),
+						td: (props) => (
+							<CustomCitationLink
+								{...props}
+								handleCitationClick={handleCitationClick}
+								messageIndex={index}
+								citations={msg.references?.citations || []}
+								papers={papers}
+							/>
+						),
+						table: CopyableTable,
+					}}
+				>
+					{msg.content}
+				</Markdown>
+				<MessageArtifactCards
+					msg={msg}
+					projectId={projectId}
+					onOpenPaper={openArtifactPaper}
+				/>
+				{/* A chart this turn asked for. Its job card is the placeholder
+				    that becomes the chart in place, so it owns the render and
+				    the same artifact is withheld from the cards above. */}
+				{projectId && msg.chart_jobs && msg.chart_jobs.length > 0 && (
+					<ChatChartJobs
+						jobs={msg.chart_jobs}
+						projectId={projectId}
+						onOpenPaper={openArtifactPaper}
+					/>
+				)}
+				{msg.references && msg.references["citations"]?.length > 0 ? (
+					<div className="mt-4 pt-3 border-t border-gray-200 dark:border-gray-700">
+						<div
+							className="flex items-center justify-between"
+							id="references-section"
+						>
+							<button
+								onClick={() => toggleReferences(index)}
+								className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+							>
+								{collapsedReferences.has(index) ? (
+									<ChevronDown className="h-3 w-3" />
+								) : (
+									<ChevronUp className="h-3 w-3" />
+								)}
+								References ({msg.references.citations.length})
+								{msg.references.citations.length > 15 && (
+									<span className="text-amber-600 dark:text-amber-400 ml-1">• summarized</span>
+								)}
+							</button>
+							{msg.role === "assistant" && (
+								<ChatMessageActions message={msg.content} references={msg.references} />
+							)}
+						</div>
+						{!collapsedReferences.has(index) && (
+							<ReferencePaperCards
+								citations={msg.references.citations}
+								papers={papers}
+								messageId={msg.id}
+								messageIndex={index}
+								highlightedPaper={
+									highlightedInfo && highlightedInfo.messageIndex === index
+										? highlightedInfo.paperId
+										: null
+								}
+								onHighlightClear={() => setHighlightedInfo(null)}
+								onPaperClick={(paper) => {
+									openPaperPdf(paper, null);
+								}}
+							/>
+						)}
+					</div>
+				) : (
+					msg.role === "assistant" && (
+						<ChatMessageActions message={msg.content} references={msg.references} />
+					)
+				)}
+			</div>
+			</div>
+			{msg.role === "user" && msg.scope && msg.scope.length > 0 && (
+				<div className="mt-1.5 self-start max-w-full">
+					<MentionContextBar entities={scopeItemsToEntities(msg.scope)} linkable />
+				</div>
+			)}
+		</div>
+	));
+
+	return (
+		<div className="flex flex-row w-full h-full">
+			<div className={`flex flex-col h-full transition-all duration-500 ease-in-out ${isMobile ? (isPdfVisible ? 'hidden' : 'w-full') : onOpenPaperExternal ? 'w-full max-w-3xl mx-auto' : (isPdfVisible ? 'w-1/3' : 'w-full md:w-1/2 mx-auto')}`}>
+				<div
+					className={`${isCentered ? "flex-0" : "flex-1"} w-full overflow-y-auto transition-all duration-300 ease-in-out`}
+					ref={messagesContainerRef}
+				>
+					<div className={`space-y-4 w-full transition-all duration-300 ease-in-out ${isPdfVisible ? 'p-2' : 'px-4 py-2'}`}>
+						{isSessionLoading ? (
+							<ChatHistorySkeleton />
+						) : (
+							<>
+								<Dialog open={!isPapersLoading && papers.length === 0 && messages.length === 0 && !authLoading}>
+									<DialogContent hideCloseButton onInteractOutside={(e) => e.preventDefault()}>
+										<DialogHeader>
+											<div className="flex items-center justify-center mb-4">
+												<div className="flex items-center justify-center w-12 h-12 rounded-full bg-primary/10">
+													<BookOpen className="h-6 w-6 text-primary" />
+												</div>
+											</div>
+											<DialogTitle className="text-center">Build Your Knowledge Base</DialogTitle>
+											<DialogDescription className="text-center space-y-3">
+												<p>
+													Upload your first paper to get started. As your library grows, you&apos;ll be able to ask questions across your entire collection.
+												</p>
+												<p className="text-sm text-muted-foreground">
+													Think of it as building a personal research assistant that learns from every paper you add.
+												</p>
+											</DialogDescription>
+										</DialogHeader>
+										<div className="flex justify-center mt-4">
+											<Button onClick={() => (window.location.href = "/")}>
+												Go to Home
+											</Button>
+										</div>
+									</DialogContent>
+								</Dialog>
+
+								{messages.length > 0 && memoizedMessages}
+							</>
+						)}
+						{isStreaming && (
+							<div className="flex items-center gap-3 p-2">
+								<Loader className="animate-spin w-6 h-6 text-blue-500 shrink-0" />
+								<div className="text-sm text-secondary-foreground w-full">
+									{displayedText}
+									{isTyping && <span className="animate-pulse">|</span>}
+									{statusMessageHistory.length > 0 && (
+										<div className="text-xs text-gray-500 mt-1">
+											<div className="flex justify-between items-center">
+												<span>{statusMessageHistory[statusMessageHistory.length - 1].message}</span>
+												<span className="ml-2 text-gray-400 tabular-nums">({elapsedTime}s)</span>
+											</div>
+											{statusMessageHistory.length > 1 && (
+												<div className="mt-1">
+													<button onClick={() => setIsHistoryOpen(!isHistoryOpen)} className="flex items-center text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">
+														{isHistoryOpen ? <ChevronUp className="w-4 h-4 mr-1" /> : <ChevronDown className="w-4 h-4 mr-1" />}
+														<span>Progress</span>
+													</button>
+													{isHistoryOpen && (
+														<ul className="mt-2 border-l border-gray-300 dark:border-gray-600">
+															{statusMessageHistory.slice(0, -1).reverse().map((status, index) => (
+																<li key={index} className="relative ml-4 mb-1 text-gray-400">
+																	<div className="absolute w-2 h-2 bg-gray-400 rounded-full top-1.5 -left-5 dark:bg-gray-500"></div>
+																	{status.message}
+																</li>
+															))}
+														</ul>
+													)}
+												</div>
+											)}
+										</div>
+									)}
+								</div>
+							</div>
+						)}
+						{isStreaming && streamingChunks.length > 0 && (
+							<div className="relative group prose dark:prose-invert max-w-full! rounded-lg w-full text-primary dark:text-primary-foreground transition-all duration-300 ease-in-out">
+								<AnimatedMarkdown
+									className="p-0!"
+									content={streamingChunks.join("")}
+									remarkPlugins={[[remarkMath, { singleDollarTextMath: false }], remarkGfm]}
+									rehypePlugins={[rehypeKatex]}
+									components={{
+										p: (props) => (
+											<CustomCitationLink
+												{...props}
+												handleCitationClick={handleCitationClick}
+												messageIndex={messages.length}
+												citations={streamingReferences?.citations || []}
+											/>
+										),
+										li: (props) => (
+											<CustomCitationLink
+												{...props}
+												handleCitationClick={handleCitationClick}
+												messageIndex={messages.length}
+												citations={streamingReferences?.citations || []}
+											/>
+										),
+										div: (props) => (
+											<CustomCitationLink
+												{...props}
+												handleCitationClick={handleCitationClick}
+												messageIndex={messages.length}
+												citations={streamingReferences?.citations || []}
+											/>
+										),
+										td: (props) => (
+											<CustomCitationLink
+												{...props}
+												handleCitationClick={handleCitationClick}
+												messageIndex={messages.length}
+												citations={streamingReferences?.citations || []}
+											/>
+										),
+										table: CopyableTable,
+									}}
+								/>
+								{projectId && streamingChartJobs && streamingChartJobs.length > 0 && (
+									<ChatChartJobs jobs={streamingChartJobs} projectId={projectId} onOpenPaper={openArtifactPaper} />
+								)}
+								{streamingArtifacts && streamingArtifacts.length > 0 && (
+									<ChatArtifactCards artifacts={streamingArtifacts} onOpenPaper={openArtifactPaper} />
+								)}
+								<ChatMessageActions
+									message={streamingChunks.join("")}
+									references={streamingReferences}
+								/>
+							</div>
+						)}
+						<div ref={messagesEndRef} />
+						{error && (
+							<div className="flex flex-col items-start gap-2 p-4 text-black dark:text-white">
+								<p>{error}</p>
+								<Button onClick={onRetry} variant="outline">
+									<Recycle className="mr-2 h-4 w-4" />
+									Retry
+								</Button>
+							</div>
+						)}
+					</div>
+				</div>
+				<div
+					className={`transition-all duration-300 ${isCentered
+						? "flex-1 flex flex-col justify-center items-center my-au"
+						: ""
+						} ${isPdfVisible ? 'p-2' : 'py-1'} ease-in-out`}
+				>
+					{isCentered && (
+						<AnimatedGradientText
+							className="text-2xl font-bold mb-4"
+							colorFrom="#6366f1"
+							colorTo="#3b82f6"
+						>
+							What would you like to discover in your papers?
+						</AnimatedGradientText>
+					)}
+					<form onSubmit={handleNewSubmit} className="w-full transition-all duration-300 ease-in-out" ref={chatInputFormRef}>
+						<MentionInput
+							value={currentMessage}
+							onValueChange={onCurrentMessageChange}
+							onSubmit={handleNewSubmit}
+							papers={papers}
+							projects={projects}
+							papersOnly={mentionPapersOnly}
+							selection={mentionSelection}
+							onSelectionChange={onMentionSelectionChange}
+							placeholder={isCentered ? "Look for a specific citation. Find a relevant paper. Collate evidence across your library." : "Ask a follow-up"}
+							disabled={isStreaming || (!isPapersLoading && papers.length === 0) || chatCreditLimitReached || !isOwner}
+							sendDisabled={!currentMessage.trim()}
+							busy={isStreaming}
+							autoFocus
+							textareaRef={inputMessageRef}
+						/>
+						{chatCreditLimitReached && (
+							<div className="text-center text-sm text-secondary-foreground mt-2">
+								Nice! You have used your chat credits for the week.{" "}
+								<Link href="/pricing" className="text-blue-500 hover:underline">
+									Upgrade your plan to use more.
+								</Link>
+							</div>
+						)}
+					</form>
+					{!isCentered && (
+						<p className="text-[10px] text-center text-muted-foreground/70 mt-1">
+							AI can make mistakes. Verify important information.
+						</p>
+					)}
+					{isCentered && (
+						<div className="absolute bottom-0 left-0 w-full">
+							<TopicBubbles isVisible={currentMessage.length === 0} />
+						</div>
+					)}
+				</div>
+			</div>
+			{isPdfVisible && (
+				<div className={`${isMobile ? 'w-full' : 'w-2/3 border-l-2'} flex flex-col animate-in slide-in-from-right-5 duration-500 ease-in-out`}>
+					<div className="flex items-center justify-between px-3 py-2 border-b border-gray-200 dark:border-gray-700 bg-muted/50">
+						<span className="text-sm font-medium truncate flex-1 mr-2">
+							{pdfTitle || "Document"}
+						</span>
+						<Button onClick={() => setIsPdfVisible(false)} variant="ghost" size="icon" className="h-7 w-7 shrink-0">
+							<X className="h-4 w-4" />
+						</Button>
+					</div>
+					<div className="grow transition-all duration-300 ease-in-out overflow-y-auto">
+						{pdfUrl && (
+							<PdfHighlighterViewer
+								pdfUrl={pdfUrl}
+								explicitSearchTerm={searchTerm || undefined}
+								highlights={[]}
+								activeHighlight={null}
+								setUserMessageReferences={() => { }}
+								setSelectedText={() => { }}
+								setTooltipPosition={() => { }}
+								isAnnotating={false}
+								setIsAnnotating={() => { }}
+								setIsHighlightInteraction={() => { }}
+								isHighlightInteraction={false}
+								setHighlights={() => { }}
+								selectedText={''}
+								tooltipPosition={null}
+								setActiveHighlight={() => { }}
+								addHighlight={() => { }}
+								loadHighlights={async () => { }}
+								removeHighlight={() => { }}
+								renderAnnotations={() => { }}
+								annotations={[]}
+								onRefreshUrl={refreshPdfUrl}
+							/>
+						)}
+					</div>
+				</div>
+			)}
+		</div>
+	);
+};

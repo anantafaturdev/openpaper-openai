@@ -1,0 +1,502 @@
+import logging
+import uuid
+from datetime import datetime, timedelta, timezone
+from typing import List
+
+from app.auth.dependencies import get_required_user
+from app.database.crud.projects.project_data_table_crud import (
+    DataTableJobCreate,
+    data_table_job_crud,
+    data_table_result_crud,
+)
+from app.database.crud.projects.project_paper_crud import project_paper_crud
+from app.database.database import get_db
+from app.database.models import JobStatus
+from app.helpers.metadata_columns import plan_metadata_columns
+from app.helpers.pdf_jobs import jobs_client
+from app.helpers.subscription_limits import can_user_create_data_table_job
+from app.llm.operations import operations
+from app.schemas.responses import ComputedColumnSpec, DataTableSchema, DocumentMapping
+from app.schemas.user import CurrentUser
+from fastapi import APIRouter, Depends
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
+
+# Maximum time a data table job can run before being marked as failed
+MAX_DATA_TABLES_JOB_RUNTIME = timedelta(hours=1)
+
+# Create API router
+projects_data_table_router = APIRouter()
+
+
+class CreateDataTableRequest(BaseModel):
+    project_id: str
+    columns: List[str]
+    # Columns computed by the sandboxed compute agent from other columns.
+    # Labels must also appear in `columns`; specs referencing
+    # unknown columns are rejected.
+    computed_columns: List[ComputedColumnSpec] = []
+    # Columns whose value is a per-paper collection (one cited entry per
+    # instance found) rather than a scalar. Subset of `columns`.
+    list_columns: List[str] = []
+
+
+class ProposeDataTableSchemaRequest(BaseModel):
+    project_id: str
+    prompt: str
+
+
+@projects_data_table_router.post("/propose")
+def propose_data_table_schema(
+    request: ProposeDataTableSchemaRequest,
+    db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(get_required_user),
+) -> JSONResponse:
+    """
+    Propose data table columns from a natural language description of what
+    the user wants to extract from the project's papers. An agent investigates
+    the papers (search/read tools) so every proposed column is grounded in
+    what they actually report.
+
+    Deliberately sync (no `async`): the body runs a multi-turn LLM tool loop —
+    as `async def` it would block the event loop for its whole duration.
+    """
+    try:
+        prompt = request.prompt.strip()
+        if not prompt:
+            return JSONResponse(
+                status_code=400,
+                content={"message": "Prompt must not be empty"},
+            )
+
+        project_papers = project_paper_crud.get_papers_metadata_by_project_id(
+            db, project_id=uuid.UUID(request.project_id), user=current_user
+        )
+
+        columns = operations.propose_data_table_schema(
+            prompt=prompt,
+            papers=[(str(pp.id), str(pp.title or "Untitled")) for pp in project_papers],
+            current_user=current_user,
+            db=db,
+            project_id=request.project_id,
+        )
+
+        if not columns:
+            return JSONResponse(
+                status_code=500,
+                content={"message": "Failed to propose data table schema"},
+            )
+
+        return JSONResponse(
+            status_code=200,
+            content={
+                "columns": [
+                    {
+                        "label": col.label,
+                        "kind": col.kind,
+                        "spec": col.spec,
+                        "inputs": col.inputs,
+                        "evidence": col.evidence,
+                    }
+                    for col in columns
+                ]
+            },
+        )
+    except Exception as e:
+        logger.error(f"Error proposing data table schema: {e}")
+        return JSONResponse(
+            status_code=400,
+            content={"message": f"Failed to propose data table schema: {str(e)}"},
+        )
+
+
+@projects_data_table_router.post("")
+async def create_data_table(
+    request: CreateDataTableRequest,
+    db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(get_required_user),
+) -> JSONResponse:
+    """
+    Create a data table extraction job for a project.
+    """
+    try:
+
+        can_create, error_message = can_user_create_data_table_job(db, current_user)
+        if not can_create:
+            return JSONResponse(
+                status_code=403,
+                content={"message": error_message},
+            )
+
+        # Computed columns may only read extracted (non-computed) columns in
+        # this table — that input binding is what keeps their provenance
+        # inspectable.
+        column_set = set(request.columns)
+        computed_labels = {spec.label for spec in request.computed_columns}
+        list_labels = {label for label in request.list_columns}
+        if list_labels - column_set:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "message": f"List columns not in columns: {', '.join(sorted(list_labels - column_set))}"
+                },
+            )
+        if list_labels & computed_labels:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "message": f"Columns cannot be both list and computed: {', '.join(sorted(list_labels & computed_labels))}"
+                },
+            )
+        for spec in request.computed_columns:
+            if spec.label not in column_set:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "message": f"Computed column '{spec.label}' is not in columns"
+                    },
+                )
+            if not spec.spec.strip() or not spec.inputs:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "message": f"Computed column '{spec.label}' needs a description and at least one input column"
+                    },
+                )
+            for input_column in spec.inputs:
+                if input_column not in column_set or input_column in computed_labels:
+                    return JSONResponse(
+                        status_code=400,
+                        content={
+                            "message": f"Computed column '{spec.label}' input '{input_column}' must reference an extracted column in this table"
+                        },
+                    )
+
+        papers: List[DocumentMapping] = []
+
+        project_papers = project_paper_crud.get_all_papers_by_project_id(
+            db, project_id=uuid.UUID(request.project_id), user=current_user
+        )
+
+        for pp in project_papers:
+            papers.append(
+                DocumentMapping(
+                    id=str(pp.id),
+                    title=str(pp.title),
+                    s3_object_key=str(pp.s3_object_key),
+                )
+            )
+
+        # Metadata-like columns (authors, year, journal, ...) are answered from
+        # the stored paper records rather than by the extraction model. Columns
+        # the library fully covers skip extraction entirely; partially covered
+        # ones are still extracted, and stored values win where they exist when
+        # the webhook assembles the table.
+        metadata_plan, prefilled_labels = plan_metadata_columns(
+            columns=request.columns,
+            papers=project_papers,
+            computed_labels=computed_labels,
+            list_labels=list_labels,
+        )
+
+        # Create the job in the database first
+        job = data_table_job_crud.create(
+            db=db,
+            obj_in=DataTableJobCreate(
+                project_id=uuid.UUID(request.project_id),
+                columns=request.columns,
+                column_plan=(
+                    [
+                        {**spec.model_dump(), "kind": "computed"}
+                        for spec in request.computed_columns
+                    ]
+                    + [
+                        {"label": label, "kind": "list"}
+                        for label in request.list_columns
+                    ]
+                    + metadata_plan
+                ),
+            ),
+            user=current_user,
+        )
+
+        if not job:
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "message": "Failed to create data table job - permission denied"
+                },
+            )
+
+        job_id = str(job.id)
+
+        # The jobs service only extracts primitives; computed columns are
+        # produced server-side by the compute agent, and fully-covered
+        # metadata columns are filled from stored paper records, both when
+        # the webhook delivers the extracted dataset.
+        data_table = DataTableSchema(
+            columns=[
+                c
+                for c in request.columns
+                if c not in computed_labels and c not in prefilled_labels
+            ],
+            papers=papers,
+            list_columns=request.list_columns,
+        )
+
+        # Submit the data table processing job
+        task_id = jobs_client.submit_data_table_processing_job(
+            data_table=data_table,
+            job_id=job_id,
+        )
+
+        # Update status to running
+        data_table_job_crud.update_status(
+            db=db,
+            job_id=uuid.UUID(job_id),
+            status=JobStatus.RUNNING,
+        )
+
+        # Update the job with the task ID
+        data_table_job_crud.update_task_id(
+            db=db,
+            job_id=uuid.UUID(job_id),
+            task_id=task_id,
+        )
+
+        return JSONResponse(
+            status_code=202,
+            content={
+                "message": "Data table processing job submitted",
+                "id": job_id,
+                "task_id": task_id,
+            },
+        )
+    except Exception as e:
+        logger.error(f"Error creating data table job: {e}")
+        return JSONResponse(
+            status_code=400,
+            content={"message": f"Failed to create data table job: {str(e)}"},
+        )
+
+
+@projects_data_table_router.get("/jobs/{project_id}")
+async def list_data_table_jobs(
+    project_id: str,
+    all: bool = False,
+    db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(get_required_user),
+) -> JSONResponse:
+    """
+    List all pending data table extraction jobs for a given project.
+    """
+    try:
+        jobs = data_table_job_crud.get_by_project(
+            db=db,
+            project_id=uuid.UUID(project_id),
+            user=current_user,
+        )
+
+        # Check and update status for pending/running jobs
+        for job in jobs:
+            if (
+                job.status not in (JobStatus.COMPLETED, JobStatus.FAILED)
+                and job.task_id
+            ):
+                try:
+                    celery_status = jobs_client.check_celery_task_status(
+                        str(job.task_id)
+                    )
+                    celery_status_str = celery_status.get("status", "").lower()
+
+                    if celery_status_str == JobStatus.FAILED:
+                        # Celery task failed - update job status to match
+                        job = (
+                            data_table_job_crud.update_status(
+                                db=db,
+                                job_id=uuid.UUID(str(job.id)),
+                                status=JobStatus.FAILED,
+                            )
+                            or job
+                        )
+                    else:
+                        job_age = datetime.now(timezone.utc) - job.created_at
+
+                        # If job has been running longer than max runtime and Celery still shows running,
+                        # assume it's lost and mark as failed
+                        if (
+                            job_age > MAX_DATA_TABLES_JOB_RUNTIME
+                            and celery_status_str == JobStatus.RUNNING
+                        ):
+                            job = (
+                                data_table_job_crud.update_status(
+                                    db=db,
+                                    job_id=uuid.UUID(str(job.id)),
+                                    status=JobStatus.FAILED,
+                                )
+                                or job
+                            )
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to check Celery task status for {job.task_id}: {e}"
+                    )
+
+        if not all:
+            # Filter out failed jobs from more than 1 hour ago
+            one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
+            jobs = [
+                job
+                for job in jobs
+                if not (
+                    job.status == JobStatus.FAILED and job.started_at < one_hour_ago
+                )
+            ]
+
+        job_list = [data_table_job_crud.job_to_dict(job) for job in jobs]
+
+        return JSONResponse(
+            status_code=200,
+            content={"jobs": job_list},
+        )
+    except Exception as e:
+        logger.error(f"Error listing data table jobs: {e}")
+        return JSONResponse(
+            status_code=400,
+            content={"message": f"Failed to list data table jobs: {str(e)}"},
+        )
+
+
+@projects_data_table_router.get("/{job_id}")
+async def get_data_table_job_status(
+    job_id: str,
+    db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(get_required_user),
+) -> JSONResponse:
+    """
+    Get the status of a data table extraction job, including real-time Celery task status.
+    """
+    try:
+        job = data_table_job_crud.get(
+            db=db,
+            id=uuid.UUID(job_id),
+            user=current_user,
+        )
+
+        if not job:
+            return JSONResponse(
+                status_code=404,
+                content={"message": "Data table job not found"},
+            )
+
+        # Get real-time Celery task status if we have a task_id and job is still in progress
+        # (completed/failed jobs no longer have active Celery tasks)
+        celery_task_status = None
+        if job.task_id and job.status not in (JobStatus.COMPLETED, JobStatus.FAILED):
+            try:
+                celery_task_status = jobs_client.check_celery_task_status(
+                    str(job.task_id)
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to get Celery task status for {job.task_id}: {e}"
+                )
+
+        if celery_task_status:
+            celery_status_str = celery_task_status.get("status", "").lower()
+
+            if celery_status_str == JobStatus.FAILED:
+                # Celery task failed - update job status to match
+                job = (
+                    data_table_job_crud.update_status(
+                        db=db, job_id=uuid.UUID(str(job.id)), status=JobStatus.FAILED
+                    )
+                    or job
+                )
+            else:
+                # If job has been running for longer than the max runtime,
+                # and Celery has no record of it, assume it's lost
+                job_age = datetime.now(timezone.utc) - job.created_at
+
+                if (
+                    job_age > MAX_DATA_TABLES_JOB_RUNTIME
+                    and celery_status_str == JobStatus.PENDING
+                ):
+                    # Task is too old to still be pending - it's lost
+                    job = (
+                        data_table_job_crud.update_status(
+                            db=db,
+                            job_id=uuid.UUID(str(job.id)),
+                            status=JobStatus.FAILED,
+                        )
+                        or job
+                    )
+
+        # Build response with both job status and task status
+        response_content = {
+            "job_id": str(job.id),
+            "status": job.status,
+            "columns": job.columns,
+            "task_id": job.task_id,
+            "created_at": job.created_at.isoformat() if job.created_at else None,
+            "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+            "error_message": job.error_message,
+        }
+
+        # Add Celery task information if available
+        if celery_task_status:
+            response_content.update(
+                {
+                    "celery_status": celery_task_status.get("status"),
+                    "celery_progress_message": celery_task_status.get(
+                        "progress_message"
+                    ),
+                    "celery_error": celery_task_status.get("error"),
+                }
+            )
+
+        return JSONResponse(status_code=200, content=response_content)
+    except Exception as e:
+        logger.error(f"Error fetching data table job status: {e}")
+        return JSONResponse(
+            status_code=400,
+            content={"message": f"Failed to fetch data table job status: {str(e)}"},
+        )
+
+
+@projects_data_table_router.get("/results/{result_id}")
+async def get_data_table_job_results(
+    result_id: str,
+    db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(get_required_user),
+) -> JSONResponse:
+    """
+    Get the results of a completed data table extraction job.
+    """
+    try:
+        result = data_table_result_crud.get(
+            db=db,
+            id=uuid.UUID(result_id),
+            user=current_user,
+        )
+
+        if not result:
+            return JSONResponse(
+                status_code=404,
+                content={"message": "Data table results not found"},
+            )
+
+        data = data_table_result_crud.result_to_dict(result)
+
+        return JSONResponse(
+            status_code=200,
+            content={"data": data},
+        )
+    except Exception as e:
+        logger.error(f"Error fetching data table job results: {e}")
+        return JSONResponse(
+            status_code=400,
+            content={"message": f"Failed to fetch data table job results: {str(e)}"},
+        )
