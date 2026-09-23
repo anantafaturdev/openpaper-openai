@@ -2,29 +2,53 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
-import { Search, FileText, FolderKanban, Command, Loader2, Highlighter, ChevronDown, ChevronUp, MessageSquareText } from "lucide-react";
+import {
+    Search,
+    FileText,
+    FolderKanban,
+    Command,
+    Loader2,
+    Highlighter,
+    ChevronDown,
+    ChevronUp,
+    MessageSquareText,
+} from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { fetchFromApi } from "@/lib/api";
 import { PaperResult, SearchResults } from "@/lib/schema";
 import { useProjects } from "@/hooks/useProjects";
 
 // Helper to check if text contains search term
-const textMatchesSearch = (text: string | null | undefined, searchTerm: string): boolean => {
+const textMatchesSearch = (
+    text: string | null | undefined,
+    searchTerm: string,
+): boolean => {
     if (!text) return false;
     return text.toLowerCase().includes(searchTerm.toLowerCase());
 };
 
 // Helper to highlight search terms in text
-const highlightSearchTerm = (text: string, searchTerm: string): React.ReactNode => {
+const highlightSearchTerm = (
+    text: string,
+    searchTerm: string,
+): React.ReactNode => {
     if (!searchTerm || !text) return text;
-    const regex = new RegExp(`(${searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+    const regex = new RegExp(
+        `(${searchTerm.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`,
+        "gi",
+    );
     const parts = text.split(regex);
     return parts.map((part, index) =>
         regex.test(part) ? (
-            <mark key={index} className="bg-yellow-200 dark:bg-yellow-800 px-0.5 rounded">
+            <mark
+                key={index}
+                className="bg-yellow-200 dark:bg-yellow-800 px-0.5 rounded"
+            >
                 {part}
             </mark>
-        ) : part
+        ) : (
+            part
+        ),
     );
 };
 
@@ -54,9 +78,10 @@ export function HomeSearch() {
         if (!query.trim()) return [];
         const lowerQuery = query.toLowerCase();
         return allProjects
-            .filter((p) =>
-                p.title.toLowerCase().includes(lowerQuery) ||
-                p.description?.toLowerCase().includes(lowerQuery)
+            .filter(
+                (p) =>
+                    p.title.toLowerCase().includes(lowerQuery) ||
+                    p.description?.toLowerCase().includes(lowerQuery),
             )
             .slice(0, 3);
     }, [allProjects, query]);
@@ -64,7 +89,9 @@ export function HomeSearch() {
     // Build a flat list of selectable items for keyboard navigation
     const selectableItems = useMemo((): SelectableItem[] => {
         const items: SelectableItem[] = [];
-        filteredProjects.forEach((p) => items.push({ type: "project", id: p.id }));
+        filteredProjects.forEach((p) =>
+            items.push({ type: "project", id: p.id }),
+        );
         papers.forEach((p) => items.push({ type: "paper", id: p.id }));
         // Always include "Ask knowledge base" option when there's a query
         if (query.trim()) {
@@ -83,7 +110,9 @@ export function HomeSearch() {
     // Scroll selected item into view
     useEffect(() => {
         if (resultsRef.current && selectedIndex >= 0) {
-            const selectedElement = resultsRef.current.querySelector(`[data-index="${selectedIndex}"]`);
+            const selectedElement = resultsRef.current.querySelector(
+                `[data-index="${selectedIndex}"]`,
+            );
             selectedElement?.scrollIntoView({ block: "nearest" });
         }
     }, [selectedIndex]);
@@ -109,13 +138,17 @@ export function HomeSearch() {
     // Click outside to close
     useEffect(() => {
         const handleClickOutside = (e: MouseEvent) => {
-            if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+            if (
+                containerRef.current &&
+                !containerRef.current.contains(e.target as Node)
+            ) {
                 setIsOpen(false);
             }
         };
 
         document.addEventListener("mousedown", handleClickOutside);
-        return () => document.removeEventListener("mousedown", handleClickOutside);
+        return () =>
+            document.removeEventListener("mousedown", handleClickOutside);
     }, []);
 
     // Debounced search
@@ -146,7 +179,7 @@ export function HomeSearch() {
                 // Search papers
                 const searchResponse: SearchResults = await fetchFromApi(
                     `/api/search/local?q=${encodeURIComponent(query)}&limit=5`,
-                    { signal: controller.signal }
+                    { signal: controller.signal },
                 );
 
                 // Check if this request was aborted
@@ -159,7 +192,7 @@ export function HomeSearch() {
                 setIsLoading(false);
             } catch (error) {
                 // Ignore abort errors
-                if (error instanceof Error && error.name === 'AbortError') {
+                if (error instanceof Error && error.name === "AbortError") {
                     return;
                 }
                 console.error("Search error:", error);
@@ -178,15 +211,18 @@ export function HomeSearch() {
         };
     }, [query]);
 
-    const handleSelect = useCallback((type: "paper" | "project", id: string) => {
-        setIsOpen(false);
-        setQuery("");
-        if (type === "paper") {
-            router.push(`/paper/${id}`);
-        } else {
-            router.push(`/project/${id}`);
-        }
-    }, [router]);
+    const handleSelect = useCallback(
+        (type: "paper" | "project", id: string) => {
+            setIsOpen(false);
+            setQuery("");
+            if (type === "paper") {
+                router.push(`/paper/${id}`);
+            } else {
+                router.push(`/project/${id}`);
+            }
+        },
+        [router],
+    );
 
     const handleAskKnowledgeBase = useCallback(() => {
         setIsOpen(false);
@@ -194,38 +230,59 @@ export function HomeSearch() {
         setQuery("");
     }, [router, query]);
 
-    const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
-        if (!isOpen || selectableItems.length === 0) return;
+    const handleKeyDown = useCallback(
+        (e: React.KeyboardEvent<HTMLInputElement>) => {
+            if (!isOpen || selectableItems.length === 0) return;
 
-        switch (e.key) {
-            case "ArrowDown":
-                e.preventDefault();
-                setSelectedIndex((prev) =>
-                    prev < selectableItems.length - 1 ? prev + 1 : 0
-                );
-                break;
-            case "ArrowUp":
-                e.preventDefault();
-                setSelectedIndex((prev) =>
-                    prev > 0 ? prev - 1 : selectableItems.length - 1
-                );
-                break;
-            case "Enter":
-                e.preventDefault();
-                const selected = selectableItems[selectedIndex];
-                if (selected) {
-                    if (selected.type === "ask") {
-                        handleAskKnowledgeBase();
-                    } else {
-                        handleSelect(selected.type, selected.id);
+            // Allow text-editing keyboard shortcuts (select all, copy, cut, paste, undo, etc.)
+            // to pass through without interference from React's synthetic event system
+            if (
+                (e.ctrlKey || e.metaKey) &&
+                ["a", "c", "x", "v", "z", "y"].includes(e.key.toLowerCase())
+            ) {
+                return;
+            }
+
+            switch (e.key) {
+                case "ArrowDown":
+                    e.preventDefault();
+                    setSelectedIndex((prev) =>
+                        prev < selectableItems.length - 1 ? prev + 1 : 0,
+                    );
+                    break;
+                case "ArrowUp":
+                    e.preventDefault();
+                    setSelectedIndex((prev) =>
+                        prev > 0 ? prev - 1 : selectableItems.length - 1,
+                    );
+                    break;
+                case "Enter":
+                    e.preventDefault();
+                    const selected = selectableItems[selectedIndex];
+                    if (selected) {
+                        if (selected.type === "ask") {
+                            handleAskKnowledgeBase();
+                        } else {
+                            handleSelect(selected.type, selected.id);
+                        }
                     }
-                }
-                break;
-        }
-    }, [isOpen, selectableItems, selectedIndex, handleSelect, handleAskKnowledgeBase]);
+                    break;
+            }
+        },
+        [
+            isOpen,
+            selectableItems,
+            selectedIndex,
+            handleSelect,
+            handleAskKnowledgeBase,
+        ],
+    );
 
     return (
-        <div ref={containerRef} className="relative w-full max-w-2xl mx-auto px-4">
+        <div
+            ref={containerRef}
+            className="relative w-full max-w-2xl mx-auto px-4"
+        >
             <div className="relative">
                 <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground pointer-events-none" />
                 <Input
@@ -254,7 +311,10 @@ export function HomeSearch() {
                             <span className="text-sm">Searching...</span>
                         </div>
                     ) : hasResults ? (
-                        <div ref={resultsRef} className="max-h-[400px] overflow-y-auto">
+                        <div
+                            ref={resultsRef}
+                            className="max-h-[400px] overflow-y-auto"
+                        >
                             {filteredProjects.length > 0 && (
                                 <div className="p-2">
                                     <p className="px-3 py-2 text-xs font-medium text-muted-foreground uppercase tracking-wide">
@@ -264,13 +324,22 @@ export function HomeSearch() {
                                         <button
                                             key={project.id}
                                             data-index={idx}
-                                            onClick={() => handleSelect("project", project.id)}
-                                            onMouseEnter={() => setSelectedIndex(idx)}
+                                            onClick={() =>
+                                                handleSelect(
+                                                    "project",
+                                                    project.id,
+                                                )
+                                            }
+                                            onMouseEnter={() =>
+                                                setSelectedIndex(idx)
+                                            }
                                             className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-colors ${selectedIndex === idx ? "bg-accent" : "hover:bg-accent"}`}
                                         >
                                             <FolderKanban className="h-4 w-4 text-primary flex-shrink-0" />
                                             <div className="min-w-0">
-                                                <p className="font-medium truncate">{project.title}</p>
+                                                <p className="font-medium truncate">
+                                                    {project.title}
+                                                </p>
                                                 {project.description && (
                                                     <p className="text-sm text-muted-foreground truncate">
                                                         {project.description}
@@ -287,47 +356,107 @@ export function HomeSearch() {
                                         Papers
                                     </p>
                                     {papers.map((paper, idx) => {
-                                        const itemIndex = filteredProjects.length + idx;
+                                        const itemIndex =
+                                            filteredProjects.length + idx;
                                         // Find matching highlights
-                                        const matchingHighlights = paper.highlights?.filter(h =>
-                                            textMatchesSearch(h.raw_text, query)
-                                        ) || [];
-                                        const matchingAnnotations = paper.annotations?.filter(a =>
-                                            textMatchesSearch(a.content, query)
-                                        ) || [];
-                                        const hasMatches = matchingHighlights.length > 0 || matchingAnnotations.length > 0;
-                                        const isExpanded = expandedPaperId === paper.id;
+                                        const matchingHighlights =
+                                            paper.highlights?.filter((h) =>
+                                                textMatchesSearch(
+                                                    h.raw_text,
+                                                    query,
+                                                ),
+                                            ) || [];
+                                        const matchingAnnotations =
+                                            paper.annotations?.filter((a) =>
+                                                textMatchesSearch(
+                                                    a.content,
+                                                    query,
+                                                ),
+                                            ) || [];
+                                        const hasMatches =
+                                            matchingHighlights.length > 0 ||
+                                            matchingAnnotations.length > 0;
+                                        const isExpanded =
+                                            expandedPaperId === paper.id;
 
                                         return (
-                                            <div key={paper.id} className="mb-1">
+                                            <div
+                                                key={paper.id}
+                                                className="mb-1"
+                                            >
                                                 <button
                                                     data-index={itemIndex}
-                                                    onClick={() => handleSelect("paper", paper.id)}
-                                                    onMouseEnter={() => setSelectedIndex(itemIndex)}
+                                                    onClick={() =>
+                                                        handleSelect(
+                                                            "paper",
+                                                            paper.id,
+                                                        )
+                                                    }
+                                                    onMouseEnter={() =>
+                                                        setSelectedIndex(
+                                                            itemIndex,
+                                                        )
+                                                    }
                                                     className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-colors ${selectedIndex === itemIndex ? "bg-accent" : "hover:bg-accent"}`}
                                                 >
                                                     <FileText className="h-4 w-4 text-blue-500 flex-shrink-0" />
                                                     <div className="min-w-0 flex-1">
-                                                        <p className="font-medium truncate">{paper.title || "Untitled Paper"}</p>
-                                                        {paper.authors && paper.authors.length > 0 && (
-                                                            <p className="text-sm text-muted-foreground truncate">
-                                                                {paper.authors.slice(0, 2).join(", ")}
-                                                                {paper.authors.length > 2 && " et al."}
-                                                            </p>
-                                                        )}
+                                                        <p className="font-medium truncate">
+                                                            {paper.title ||
+                                                                "Untitled Paper"}
+                                                        </p>
+                                                        {paper.authors &&
+                                                            paper.authors
+                                                                .length > 0 && (
+                                                                <p className="text-sm text-muted-foreground truncate">
+                                                                    {paper.authors
+                                                                        .slice(
+                                                                            0,
+                                                                            2,
+                                                                        )
+                                                                        .join(
+                                                                            ", ",
+                                                                        )}
+                                                                    {paper
+                                                                        .authors
+                                                                        .length >
+                                                                        2 &&
+                                                                        " et al."}
+                                                                </p>
+                                                            )}
                                                         {/* Match indicator */}
                                                         {hasMatches && (
                                                             <div className="flex items-center gap-2 mt-1 flex-wrap">
-                                                                {matchingHighlights.length > 0 && (
+                                                                {matchingHighlights.length >
+                                                                    0 && (
                                                                     <span className="text-xs text-yellow-600 dark:text-yellow-400 flex items-center gap-1">
                                                                         <Highlighter className="h-3 w-3" />
-                                                                        <span>{matchingHighlights.length} highlight{matchingHighlights.length !== 1 ? 's' : ''}</span>
+                                                                        <span>
+                                                                            {
+                                                                                matchingHighlights.length
+                                                                            }{" "}
+                                                                            highlight
+                                                                            {matchingHighlights.length !==
+                                                                            1
+                                                                                ? "s"
+                                                                                : ""}
+                                                                        </span>
                                                                     </span>
                                                                 )}
-                                                                {matchingAnnotations.length > 0 && (
+                                                                {matchingAnnotations.length >
+                                                                    0 && (
                                                                     <span className="text-xs text-blue-600 dark:text-blue-400 flex items-center gap-1">
                                                                         <MessageSquareText className="h-3 w-3" />
-                                                                        <span>{matchingAnnotations.length} note{matchingAnnotations.length !== 1 ? 's' : ''}</span>
+                                                                        <span>
+                                                                            {
+                                                                                matchingAnnotations.length
+                                                                            }{" "}
+                                                                            note
+                                                                            {matchingAnnotations.length !==
+                                                                            1
+                                                                                ? "s"
+                                                                                : ""}
+                                                                        </span>
                                                                     </span>
                                                                 )}
                                                             </div>
@@ -338,7 +467,11 @@ export function HomeSearch() {
                                                         <button
                                                             onClick={(e) => {
                                                                 e.stopPropagation();
-                                                                setExpandedPaperId(isExpanded ? null : paper.id);
+                                                                setExpandedPaperId(
+                                                                    isExpanded
+                                                                        ? null
+                                                                        : paper.id,
+                                                                );
                                                             }}
                                                             className="p-1 hover:bg-accent rounded"
                                                         >
@@ -354,57 +487,104 @@ export function HomeSearch() {
                                                 {/* Expanded matching highlights */}
                                                 {hasMatches && isExpanded && (
                                                     <div className="ml-10 mr-3 mb-2 space-y-2">
-                                                        {matchingHighlights.slice(0, 3).map((highlight) => (
-                                                            <button
-                                                                key={highlight.id}
-                                                                onClick={(e) => {
-                                                                    e.stopPropagation();
-                                                                    setIsOpen(false);
-                                                                    setQuery("");
-                                                                    router.push(`/paper/${paper.id}?rsf=annotations`);
-                                                                }}
-                                                                className="w-full p-2 text-sm border-l-2 border-yellow-400 bg-yellow-50/50 dark:bg-yellow-950/20 rounded-r text-left hover:bg-yellow-100 dark:hover:bg-yellow-900/30 transition-colors"
-                                                            >
-                                                                <div className="flex items-start gap-2">
-                                                                    <Highlighter className="h-3 w-3 text-yellow-600 mt-0.5 flex-shrink-0" />
-                                                                    <p className="line-clamp-2">
-                                                                        {highlightSearchTerm(highlight.raw_text, query)}
-                                                                    </p>
-                                                                </div>
-                                                                {highlight.page_number && (
-                                                                    <p className="text-xs text-muted-foreground mt-1 ml-5">
-                                                                        Page {highlight.page_number}
-                                                                    </p>
-                                                                )}
-                                                            </button>
-                                                        ))}
-                                                        {matchingHighlights.length > 3 && (
+                                                        {matchingHighlights
+                                                            .slice(0, 3)
+                                                            .map(
+                                                                (highlight) => (
+                                                                    <button
+                                                                        key={
+                                                                            highlight.id
+                                                                        }
+                                                                        onClick={(
+                                                                            e,
+                                                                        ) => {
+                                                                            e.stopPropagation();
+                                                                            setIsOpen(
+                                                                                false,
+                                                                            );
+                                                                            setQuery(
+                                                                                "",
+                                                                            );
+                                                                            router.push(
+                                                                                `/paper/${paper.id}?rsf=annotations`,
+                                                                            );
+                                                                        }}
+                                                                        className="w-full p-2 text-sm border-l-2 border-yellow-400 bg-yellow-50/50 dark:bg-yellow-950/20 rounded-r text-left hover:bg-yellow-100 dark:hover:bg-yellow-900/30 transition-colors"
+                                                                    >
+                                                                        <div className="flex items-start gap-2">
+                                                                            <Highlighter className="h-3 w-3 text-yellow-600 mt-0.5 flex-shrink-0" />
+                                                                            <p className="line-clamp-2">
+                                                                                {highlightSearchTerm(
+                                                                                    highlight.raw_text,
+                                                                                    query,
+                                                                                )}
+                                                                            </p>
+                                                                        </div>
+                                                                        {highlight.page_number && (
+                                                                            <p className="text-xs text-muted-foreground mt-1 ml-5">
+                                                                                Page{" "}
+                                                                                {
+                                                                                    highlight.page_number
+                                                                                }
+                                                                            </p>
+                                                                        )}
+                                                                    </button>
+                                                                ),
+                                                            )}
+                                                        {matchingHighlights.length >
+                                                            3 && (
                                                             <p className="text-xs text-muted-foreground ml-5">
-                                                                +{matchingHighlights.length - 3} more
+                                                                +
+                                                                {matchingHighlights.length -
+                                                                    3}{" "}
+                                                                more
                                                             </p>
                                                         )}
-                                                        {matchingAnnotations.slice(0, 3).map((annotation) => (
-                                                            <button
-                                                                key={annotation.id}
-                                                                onClick={(e) => {
-                                                                    e.stopPropagation();
-                                                                    setIsOpen(false);
-                                                                    setQuery("");
-                                                                    router.push(`/paper/${paper.id}?rsf=annotations`);
-                                                                }}
-                                                                className="w-full p-2 text-sm border-l-2 border-blue-400 bg-blue-50/50 dark:bg-blue-950/20 rounded-r text-left hover:bg-blue-100 dark:hover:bg-blue-900/30 transition-colors"
-                                                            >
-                                                                <div className="flex items-start gap-2">
-                                                                    <MessageSquareText className="h-3 w-3 text-blue-600 mt-0.5 flex-shrink-0" />
-                                                                    <p className="line-clamp-2">
-                                                                        {highlightSearchTerm(annotation.content, query)}
-                                                                    </p>
-                                                                </div>
-                                                            </button>
-                                                        ))}
-                                                        {matchingAnnotations.length > 3 && (
+                                                        {matchingAnnotations
+                                                            .slice(0, 3)
+                                                            .map(
+                                                                (
+                                                                    annotation,
+                                                                ) => (
+                                                                    <button
+                                                                        key={
+                                                                            annotation.id
+                                                                        }
+                                                                        onClick={(
+                                                                            e,
+                                                                        ) => {
+                                                                            e.stopPropagation();
+                                                                            setIsOpen(
+                                                                                false,
+                                                                            );
+                                                                            setQuery(
+                                                                                "",
+                                                                            );
+                                                                            router.push(
+                                                                                `/paper/${paper.id}?rsf=annotations`,
+                                                                            );
+                                                                        }}
+                                                                        className="w-full p-2 text-sm border-l-2 border-blue-400 bg-blue-50/50 dark:bg-blue-950/20 rounded-r text-left hover:bg-blue-100 dark:hover:bg-blue-900/30 transition-colors"
+                                                                    >
+                                                                        <div className="flex items-start gap-2">
+                                                                            <MessageSquareText className="h-3 w-3 text-blue-600 mt-0.5 flex-shrink-0" />
+                                                                            <p className="line-clamp-2">
+                                                                                {highlightSearchTerm(
+                                                                                    annotation.content,
+                                                                                    query,
+                                                                                )}
+                                                                            </p>
+                                                                        </div>
+                                                                    </button>
+                                                                ),
+                                                            )}
+                                                        {matchingAnnotations.length >
+                                                            3 && (
                                                             <p className="text-xs text-muted-foreground ml-5">
-                                                                +{matchingAnnotations.length - 3} more
+                                                                +
+                                                                {matchingAnnotations.length -
+                                                                    3}{" "}
+                                                                more
                                                             </p>
                                                         )}
                                                     </div>
@@ -417,17 +597,22 @@ export function HomeSearch() {
                             {/* Ask knowledge base option */}
                             <div className="p-2 border-t">
                                 {(() => {
-                                    const askIndex = filteredProjects.length + papers.length;
+                                    const askIndex =
+                                        filteredProjects.length + papers.length;
                                     return (
                                         <button
                                             data-index={askIndex}
                                             onClick={handleAskKnowledgeBase}
-                                            onMouseEnter={() => setSelectedIndex(askIndex)}
+                                            onMouseEnter={() =>
+                                                setSelectedIndex(askIndex)
+                                            }
                                             className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-colors ${selectedIndex === askIndex ? "bg-accent" : "hover:bg-accent"}`}
                                         >
                                             <Search className="h-4 w-4 text-primary flex-shrink-0" />
                                             <div className="min-w-0 flex-1">
-                                                <p className="font-medium">Ask your knowledge base</p>
+                                                <p className="font-medium">
+                                                    Ask your knowledge base
+                                                </p>
                                                 <p className="text-sm text-muted-foreground truncate">
                                                     &quot;{query}&quot;
                                                 </p>
@@ -445,14 +630,18 @@ export function HomeSearch() {
                             <button
                                 onClick={() => {
                                     setIsOpen(false);
-                                    router.push(`/understand?q=${encodeURIComponent(query)}`);
+                                    router.push(
+                                        `/understand?q=${encodeURIComponent(query)}`,
+                                    );
                                     setQuery("");
                                 }}
                                 className="w-full flex items-center gap-3 px-4 py-3 rounded-lg bg-primary/5 hover:bg-primary/10 border border-primary/20 text-left transition-colors"
                             >
                                 <Search className="h-5 w-5 text-primary flex-shrink-0" />
                                 <div className="min-w-0 flex-1">
-                                    <p className="font-medium text-foreground">Ask your knowledge base</p>
+                                    <p className="font-medium text-foreground">
+                                        Ask your knowledge base
+                                    </p>
                                     <p className="text-sm text-muted-foreground truncate">
                                         &quot;{query}&quot;
                                     </p>

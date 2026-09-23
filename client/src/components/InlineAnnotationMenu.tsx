@@ -1,10 +1,14 @@
-import {
-    PaperHighlight,
-} from '@/lib/schema';
+import { PaperHighlight } from "@/lib/schema";
 
 import { useEffect, useState, useRef } from "react";
 import { Button } from "./ui/button";
-import { Bookmark, Copy, Highlighter, MessageCircle, Minus } from "lucide-react";
+import {
+    Bookmark,
+    Copy,
+    Highlighter,
+    MessageCircle,
+    Minus,
+} from "lucide-react";
 
 interface InlineAnnotationMenuProps {
     selectedText: string;
@@ -34,7 +38,12 @@ interface ActionButtonProps {
     className?: string;
 }
 
-function ActionButton({ icon, label, onClick, className = "" }: ActionButtonProps) {
+function ActionButton({
+    icon,
+    label,
+    onClick,
+    className = "",
+}: ActionButtonProps) {
     return (
         <Button
             variant="ghost"
@@ -64,7 +73,10 @@ export default function InlineAnnotationMenu(props: InlineAnnotationMenuProps) {
     } = props;
 
     const menuRef = useRef<HTMLDivElement>(null);
-    const [menuPosition, setMenuPosition] = useState<{ left: number; top: number } | null>(null);
+    const [menuPosition, setMenuPosition] = useState<{
+        left: number;
+        top: number;
+    } | null>(null);
 
     // Always place below the anchor, clamped to viewport edges
     useEffect(() => {
@@ -74,12 +86,13 @@ export default function InlineAnnotationMenu(props: InlineAnnotationMenuProps) {
         }
         const left = Math.min(
             Math.max(0, tooltipPosition.x),
-            window.innerWidth - MENU_WIDTH
+            window.innerWidth - MENU_WIDTH,
         );
         const spaceBelow = window.innerHeight - tooltipPosition.y - MENU_OFFSET;
-        const top = spaceBelow >= MENU_HEIGHT
-            ? tooltipPosition.y + MENU_OFFSET
-            : tooltipPosition.y - MENU_HEIGHT - MENU_OFFSET;
+        const top =
+            spaceBelow >= MENU_HEIGHT
+                ? tooltipPosition.y + MENU_OFFSET
+                : tooltipPosition.y - MENU_HEIGHT - MENU_OFFSET;
         setMenuPosition({ left, top });
     }, [tooltipPosition]);
 
@@ -92,12 +105,18 @@ export default function InlineAnnotationMenu(props: InlineAnnotationMenuProps) {
                 navigator.clipboard.writeText(selectedText);
             } else if (e.key === "a" && (e.ctrlKey || e.metaKey)) {
                 setUserMessageReferences((prev: string[]) =>
-                    Array.from(new Set([...prev, selectedText]))
+                    Array.from(new Set([...prev, selectedText])),
                 );
+                return;
             } else if (e.key === "h" && (e.ctrlKey || e.metaKey)) {
                 addHighlight(selectedText);
                 e.stopPropagation();
-            } else if (e.key === "d" && (e.ctrlKey || e.metaKey) && isHighlightInteraction && activeHighlight) {
+            } else if (
+                e.key === "d" &&
+                (e.ctrlKey || e.metaKey) &&
+                isHighlightInteraction &&
+                activeHighlight
+            ) {
                 removeHighlight(activeHighlight);
                 close();
             } else if (e.key === "e" && (e.ctrlKey || e.metaKey)) {
@@ -127,7 +146,8 @@ export default function InlineAnnotationMenu(props: InlineAnnotationMenuProps) {
         const handleOutsideClick = (e: MouseEvent) => {
             const target = e.target as HTMLElement;
             // Let handleHighlightClick handle highlight clicks — don't close here
-            if (target.closest?.('.TextHighlight__parts, .TextHighlight__part')) return;
+            if (target.closest?.(".TextHighlight__parts, .TextHighlight__part"))
+                return;
             if (menuRef.current && !menuRef.current.contains(target)) {
                 close();
             }
@@ -148,7 +168,10 @@ export default function InlineAnnotationMenu(props: InlineAnnotationMenuProps) {
             ref={menuRef}
             data-inline-annotation-menu=""
             className="fixed z-30 bg-background shadow-md rounded-lg border border-border"
-            style={{ left: `${menuPosition.left}px`, top: `${menuPosition.top}px` }}
+            style={{
+                left: `${menuPosition.left}px`,
+                top: `${menuPosition.top}px`,
+            }}
             onClick={(e) => e.stopPropagation()}
             onMouseDown={(e) => e.stopPropagation()}
         >
@@ -187,8 +210,8 @@ export default function InlineAnnotationMenu(props: InlineAnnotationMenuProps) {
                     label="Ask"
                     onClick={(e) => {
                         e.stopPropagation();
-                        setUserMessageReferences(prev =>
-                            Array.from(new Set([...prev, selectedText]))
+                        setUserMessageReferences((prev) =>
+                            Array.from(new Set([...prev, selectedText])),
                         );
                         close();
                     }}
@@ -217,7 +240,6 @@ export default function InlineAnnotationMenu(props: InlineAnnotationMenuProps) {
                         }}
                     />
                 )}
-
             </div>
         </div>
     );
