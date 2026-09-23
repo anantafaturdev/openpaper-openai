@@ -1,27 +1,35 @@
-'use client';
+"use client";
 
-import { useSubscription, isChatCreditAtLimit } from '@/hooks/useSubscription';
-import { fetchFromApi, fetchStreamFromApi } from '@/lib/api';
-import { useState, useEffect, FormEvent, useRef, useCallback, useMemo, Suspense } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useSubscription, isChatCreditAtLimit } from "@/hooks/useSubscription";
+import { fetchFromApi, fetchStreamFromApi } from "@/lib/api";
+import {
+    useState,
+    useEffect,
+    FormEvent,
+    useRef,
+    useCallback,
+    useMemo,
+    Suspense,
+} from "react";
+import { useParams, useRouter } from "next/navigation";
 import {
     ChatMessage,
     ChatArtifact,
     ChartGenerationJob,
     MessageTrace,
     Reference,
-} from '@/lib/schema';
-import { useAuth } from '@/lib/auth';
-import { useProjectWorkspace } from '@/components/project/ProjectWorkspaceProvider';
+} from "@/lib/schema";
+import { useAuth } from "@/lib/auth";
+import { useProjectWorkspace } from "@/components/project/ProjectWorkspaceProvider";
 import { PaperItem } from "@/lib/schema";
 import { toast } from "sonner";
-import { ConversationView } from '@/components/ConversationView';
+import { ConversationView } from "@/components/ConversationView";
 import {
     MentionSelection,
     EMPTY_MENTION_SELECTION,
     mentionSelectionIsEmpty,
     selectionToScopeItems,
-} from '@/components/chat/MentionAutocomplete';
+} from "@/components/chat/MentionAutocomplete";
 
 interface ChatRequestBody {
     user_query: string;
@@ -39,7 +47,7 @@ const chatLoadingMessages = [
     "Verifying information...",
     "Crafting insights...",
     "Synthesizing findings...",
-]
+];
 
 function ProjectConversationPageContent() {
     const router = useRouter();
@@ -61,7 +69,9 @@ function ProjectConversationPageContent() {
     } = useProjectWorkspace();
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [isOwner, setIsOwner] = useState<boolean>(true);
-    const [mentionSelection, setMentionSelection] = useState<MentionSelection>(EMPTY_MENTION_SELECTION);
+    const [mentionSelection, setMentionSelection] = useState<MentionSelection>(
+        EMPTY_MENTION_SELECTION,
+    );
 
     const papers = useMemo(
         () =>
@@ -73,18 +83,30 @@ function ProjectConversationPageContent() {
         [projectPapers],
     );
 
-    const [currentMessage, setCurrentMessage] = useState('');
+    const [currentMessage, setCurrentMessage] = useState("");
     const [isStreaming, setIsStreaming] = useState(false);
-    const [conversationId, setConversationId] = useState<string | null>(conversationIdFromUrl);
+    const [conversationId, setConversationId] = useState<string | null>(
+        conversationIdFromUrl,
+    );
     const [streamingChunks, setStreamingChunks] = useState<string[]>([]);
-    const [streamingReferences, setStreamingReferences] = useState<Reference | undefined>(undefined);
-    const [streamingArtifacts, setStreamingArtifacts] = useState<ChatArtifact[]>([]);
-    const [streamingChartJobs, setStreamingChartJobs] = useState<ChartGenerationJob[]>([]);
-    const [currentLoadingMessageIndex, setCurrentLoadingMessageIndex] = useState(0);
-    const [displayedText, setDisplayedText] = useState('');
+    const [streamingReferences, setStreamingReferences] = useState<
+        Reference | undefined
+    >(undefined);
+    const [streamingArtifacts, setStreamingArtifacts] = useState<
+        ChatArtifact[]
+    >([]);
+    const [streamingChartJobs, setStreamingChartJobs] = useState<
+        ChartGenerationJob[]
+    >([]);
+    const [currentLoadingMessageIndex, setCurrentLoadingMessageIndex] =
+        useState(0);
+    const [displayedText, setDisplayedText] = useState("");
     const [isTyping, setIsTyping] = useState(false);
-    const [statusMessage, setStatusMessage] = useState('');
-    const [highlightedInfo, setHighlightedInfo] = useState<{ paperId: string; messageIndex: number } | null>(null);
+    const [statusMessage, setStatusMessage] = useState("");
+    const [highlightedInfo, setHighlightedInfo] = useState<{
+        paperId: string;
+        messageIndex: number;
+    } | null>(null);
     const [isCentered, setIsCentered] = useState(false);
     const [isSessionLoading, setIsSessionLoading] = useState(true);
 
@@ -96,13 +118,15 @@ function ProjectConversationPageContent() {
     const chatCreditLimitReached = isChatCreditAtLimit(subscription);
 
     const conversationName = useMemo(
-        () => conversations.find((c) => c.id === conversationIdFromUrl)?.title ?? '',
+        () =>
+            conversations.find((c) => c.id === conversationIdFromUrl)?.title ??
+            "",
         [conversations, conversationIdFromUrl],
     );
 
     // Surface the conversation title in the workspace breadcrumb.
     useEffect(() => {
-        setCrumb(conversationName || 'Chat');
+        setCrumb(conversationName || "Chat");
         return () => setCrumb(null);
     }, [conversationName, setCrumb]);
 
@@ -127,50 +151,65 @@ function ProjectConversationPageContent() {
 
     useEffect(() => {
         const CHAT_CREDIT_TOAST_KEY = "chat_credit_limit_toast_shown";
-        if (chatCreditLimitReached && !sessionStorage.getItem(CHAT_CREDIT_TOAST_KEY)) {
-            toast.error("Nice! You've used your chat credits for the week. Upgrade your plan to continue chatting.", {
-                action: {
-                    label: "Upgrade",
-                    onClick: () => window.location.href = "/pricing",
+        if (
+            chatCreditLimitReached &&
+            !sessionStorage.getItem(CHAT_CREDIT_TOAST_KEY)
+        ) {
+            toast.error(
+                "Nice! You've used your chat credits for the day. Upgrade your plan to continue chatting.",
+                {
+                    action: {
+                        label: "Upgrade",
+                        onClick: () => (window.location.href = "/pricing"),
+                    },
                 },
-            });
+            );
             sessionStorage.setItem(CHAT_CREDIT_TOAST_KEY, "true");
         }
     }, [chatCreditLimitReached]);
 
-    const handleCitationClick = useCallback((key: string, messageIndex: number) => {
-        setHighlightedInfo((prevHighlight) => {
-            const message = messages[messageIndex];
-            if (!message) return prevHighlight;
+    const handleCitationClick = useCallback(
+        (key: string, messageIndex: number) => {
+            setHighlightedInfo((prevHighlight) => {
+                const message = messages[messageIndex];
+                if (!message) return prevHighlight;
 
-            const citation = message.references?.citations?.find(c => String(c.key) === key);
-            if (!citation || !citation.paper_id) return prevHighlight;
+                const citation = message.references?.citations?.find(
+                    (c) => String(c.key) === key,
+                );
+                if (!citation || !citation.paper_id) return prevHighlight;
 
-            // No scroll on click — the reference opens in the side panel, and
-            // jumping the chat to the references section is jarring.
-            return { paperId: citation.paper_id, messageIndex };
-        });
-    }, [messages]);
+                // No scroll on click — the reference opens in the side panel, and
+                // jumping the chat to the references section is jarring.
+                return { paperId: citation.paper_id, messageIndex };
+            });
+        },
+        [messages],
+    );
 
-
-    const fetchMessages = useCallback(async (id: string) => {
-        try {
-            const response = await fetchFromApi(`/api/projects/conversations/${projectId}/${id}`);
-            if (response && response.messages) {
-                setMessages(response.messages);
-                setIsOwner(response.is_owner);
-                setConversationId(id);
-                setIsCentered(false);
+    const fetchMessages = useCallback(
+        async (id: string) => {
+            try {
+                const response = await fetchFromApi(
+                    `/api/projects/conversations/${projectId}/${id}`,
+                );
+                if (response && response.messages) {
+                    setMessages(response.messages);
+                    setIsOwner(response.is_owner);
+                    setConversationId(id);
+                    setIsCentered(false);
+                }
+            } catch (error) {
+                console.error("Error fetching messages:", error);
+                // Go back to the project page
+                router.push(`/projects/${projectId}`);
+                toast.error("Failed to load conversation history.");
+            } finally {
+                setIsSessionLoading(false);
             }
-        } catch (error) {
-            console.error("Error fetching messages:", error);
-            // Go back to the project page
-            router.push(`/projects/${projectId}`);
-            toast.error("Failed to load conversation history.");
-        } finally {
-            setIsSessionLoading(false);
-        }
-    }, [projectId, router]);
+        },
+        [projectId, router],
+    );
 
     useEffect(() => {
         if (!conversationIdFromUrl) {
@@ -179,10 +218,14 @@ function ProjectConversationPageContent() {
         }
 
         if (user) {
-            const pendingQuery = localStorage.getItem(`pending-query-${conversationIdFromUrl}`);
+            const pendingQuery = localStorage.getItem(
+                `pending-query-${conversationIdFromUrl}`,
+            );
             if (pendingQuery) {
                 // Apply any @-mention scope carried over from the project page.
-                const pendingMentionsRaw = localStorage.getItem(`pending-mentions-${conversationIdFromUrl}`);
+                const pendingMentionsRaw = localStorage.getItem(
+                    `pending-mentions-${conversationIdFromUrl}`,
+                );
                 // If mentions were carried over, wait for project papers to load so
                 // their titles resolve — otherwise they persist as "Untitled paper".
                 // Keep the localStorage keys until then; this effect re-runs when
@@ -191,21 +234,33 @@ function ProjectConversationPageContent() {
                     return;
                 }
                 setIsSessionLoading(false);
-                localStorage.removeItem(`pending-query-${conversationIdFromUrl}`);
-                localStorage.removeItem(`pending-mentions-${conversationIdFromUrl}`);
+                localStorage.removeItem(
+                    `pending-query-${conversationIdFromUrl}`,
+                );
+                localStorage.removeItem(
+                    `pending-mentions-${conversationIdFromUrl}`,
+                );
                 let pendingMentions: MentionSelection | undefined;
                 if (pendingMentionsRaw) {
                     try {
                         const paperIds = JSON.parse(pendingMentionsRaw);
                         if (Array.isArray(paperIds) && paperIds.length > 0) {
-                            pendingMentions = { paperIds, projectIds: [], highlights: [] };
+                            pendingMentions = {
+                                paperIds,
+                                projectIds: [],
+                                highlights: [],
+                            };
                         }
                     } catch {
                         // ignore malformed pending mentions
                     }
                 }
                 handleSubmit(null, pendingQuery, pendingMentions);
-            } else if (messages.length === 0 && isSessionLoading && !isStreaming) {
+            } else if (
+                messages.length === 0 &&
+                isSessionLoading &&
+                !isStreaming
+            ) {
                 fetchMessages(conversationIdFromUrl);
             }
         } else if (!authLoading) {
@@ -215,13 +270,24 @@ function ProjectConversationPageContent() {
             setIsCentered(true);
             setIsSessionLoading(false);
         }
-    }, [conversationIdFromUrl, user, fetchMessages, router, projectId, authLoading, isSessionLoading, isPapersLoading]);
+    }, [
+        conversationIdFromUrl,
+        user,
+        fetchMessages,
+        router,
+        projectId,
+        authLoading,
+        isSessionLoading,
+        isPapersLoading,
+    ]);
 
     useEffect(() => {
         if (isStreaming) {
             setTimeout(() => {
                 if (messagesEndRef.current) {
-                    messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+                    messagesEndRef.current.scrollIntoView({
+                        behavior: "smooth",
+                    });
                 }
             }, 100);
         }
@@ -229,14 +295,14 @@ function ProjectConversationPageContent() {
 
     useEffect(() => {
         if (!isStreaming) {
-            setDisplayedText('');
+            setDisplayedText("");
             setIsTyping(false);
             return;
         }
 
         const currentMessage = chatLoadingMessages[currentLoadingMessageIndex];
         let charIndex = 0;
-        setDisplayedText('');
+        setDisplayedText("");
         setIsTyping(true);
 
         const typingInterval = setInterval(() => {
@@ -256,8 +322,8 @@ function ProjectConversationPageContent() {
         if (!isStreaming) return;
 
         const messageInterval = setInterval(() => {
-            setCurrentLoadingMessageIndex((prev) =>
-                (prev + 1) % chatLoadingMessages.length
+            setCurrentLoadingMessageIndex(
+                (prev) => (prev + 1) % chatLoadingMessages.length,
             );
         }, 11000);
 
@@ -270,262 +336,354 @@ function ProjectConversationPageContent() {
         }
     }, [isStreaming]);
 
-    const handleSubmit = useCallback(async (e: FormEvent | null = null, message?: string, mentionsOverride?: MentionSelection) => {
-        if (e) {
-            e.preventDefault();
-        }
+    const handleSubmit = useCallback(
+        async (
+            e: FormEvent | null = null,
+            message?: string,
+            mentionsOverride?: MentionSelection,
+        ) => {
+            if (e) {
+                e.preventDefault();
+            }
 
-        const query = message || currentMessage;
+            const query = message || currentMessage;
 
-        if (!query.trim() || isStreaming || !conversationId) return;
+            if (!query.trim() || isStreaming || !conversationId) return;
 
-        // Get the artifacts panel out of the way so the reply is front-and-center.
-        collapseArtifacts();
+            // Get the artifacts panel out of the way so the reply is front-and-center.
+            collapseArtifacts();
 
-        // Snapshot @-mention scope for this send, then clear it from the input.
-        const submittedMentions = mentionsOverride ?? mentionSelection;
-        const userMessage: ChatMessage = {
-            role: 'user',
-            content: query,
-            scope: mentionSelectionIsEmpty(submittedMentions)
-                ? undefined
-                : selectionToScopeItems(submittedMentions, papers, []),
-        };
-        setMessages(prev => [...prev, userMessage]);
-        // Reset to the reader-tab scope (not empty): papers open in the reader
-        // stay in scope until their tabs close; hand-typed mentions are one-shot.
-        setMentionSelection({ ...EMPTY_MENTION_SELECTION, paperIds: [...openPaperIds] });
-
-        if (!message) {
-            setCurrentMessage('');
-        }
-
-        setIsStreaming(true);
-        setStreamingChunks([]);
-        setStreamingReferences(undefined);
-        setStreamingArtifacts([]);
-        setStreamingChartJobs([]);
-        setError(null);
-
-        const requestBody: ChatRequestBody = {
-            user_query: query,
-            conversation_id: conversationId,
-            project_id: projectId,
-        };
-        if (submittedMentions.paperIds.length > 0) {
-            requestBody.mentioned_paper_ids = submittedMentions.paperIds;
-        }
-
-        try {
-            const stream = await fetchStreamFromApi('/api/message/chat/everything', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(requestBody),
-            }).catch(fetchError => {
-                console.error('Fetch error details:', {
-                    name: fetchError.name,
-                    message: fetchError.message,
-                    stack: fetchError.stack,
-                    cause: fetchError.cause
-                });
-                throw fetchError;
+            // Snapshot @-mention scope for this send, then clear it from the input.
+            const submittedMentions = mentionsOverride ?? mentionSelection;
+            const userMessage: ChatMessage = {
+                role: "user",
+                content: query,
+                scope: mentionSelectionIsEmpty(submittedMentions)
+                    ? undefined
+                    : selectionToScopeItems(submittedMentions, papers, []),
+            };
+            setMessages((prev) => [...prev, userMessage]);
+            // Reset to the reader-tab scope (not empty): papers open in the reader
+            // stay in scope until their tabs close; hand-typed mentions are one-shot.
+            setMentionSelection({
+                ...EMPTY_MENTION_SELECTION,
+                paperIds: [...openPaperIds],
             });
 
-            if (!stream) {
-                throw new Error('No stream received from server');
+            if (!message) {
+                setCurrentMessage("");
             }
 
-            const reader = stream.getReader();
-            const decoder = new TextDecoder();
-            let accumulatedContent = '';
-            let references: Reference | undefined = undefined;
-            const artifacts: ChatArtifact[] = [];
-            const chartJobs: ChartGenerationJob[] = [];
-            let trace: MessageTrace | undefined = undefined;
-            let buffer = '';
-
-            try {
-                while (true) {
-                    let result;
-                    try {
-                        result = await reader.read();
-                    } catch (readerError) {
-                        console.error('Stream reader error:', {
-                            name: readerError instanceof Error ? readerError.name : 'Unknown',
-                            message: readerError instanceof Error ? readerError.message : String(readerError),
-                            stack: readerError instanceof Error ? readerError.stack : 'No stack',
-                        });
-                        throw readerError;
-                    }
-
-                    const { done, value } = result;
-
-                    if (done) {
-                        if (buffer.trim()) {
-                            console.warn('Unprocessed buffer at end of stream:', buffer);
-                        }
-                        break;
-                    }
-
-                    if (!value) {
-                        console.warn('Received empty value from stream');
-                        continue;
-                    }
-
-                    let chunk;
-                    try {
-                        chunk = decoder.decode(value, { stream: true });
-                    } catch (decodeError) {
-                        console.error('Error decoding chunk:', decodeError);
-                        console.error('Raw chunk value:', value);
-                        continue;
-                    }
-
-                    buffer += chunk;
-
-                    const parts = buffer.split(END_DELIMITER);
-                    buffer = parts.pop() || '';
-
-                    for (const event of parts) {
-                        if (!event.trim()) continue;
-
-                        try {
-                            const parsedChunk = JSON.parse(event.trim());
-
-                            if (parsedChunk && typeof parsedChunk === 'object' && 'type' in parsedChunk) {
-                                const chunkType = parsedChunk.type;
-                                const chunkContent = parsedChunk.content;
-
-                                if (chunkType === 'content') {
-                                    accumulatedContent += chunkContent;
-                                    setStreamingChunks(prev => [...prev, chunkContent]);
-                                } else if (chunkType === 'reset') {
-                                    // The upstream model connection dropped
-                                    // mid-answer and the server re-sent the
-                                    // request. The partial answer is not
-                                    // resumable, so clear it before the
-                                    // replacement answer streams in. Artifacts,
-                                    // chart jobs and the trace come from the
-                                    // earlier evidence phase and survive it.
-                                    console.warn('Stream restarted; discarding partial answer');
-                                    accumulatedContent = '';
-                                    references = undefined;
-                                    setStreamingChunks([]);
-                                    setStreamingReferences(undefined);
-                                } else if (chunkType === 'references') {
-                                    references = chunkContent;
-                                    setStreamingReferences(chunkContent);
-                                } else if (chunkType === 'artifact') {
-                                    artifacts.push(chunkContent as ChatArtifact);
-                                    setStreamingArtifacts(prev => [...prev, chunkContent as ChatArtifact]);
-                                } else if (chunkType === 'chart_job') {
-                                    // The chart is being built in the
-                                    // background; this is the card to watch it
-                                    // by, and it arrives before the answer text.
-                                    chartJobs.push(chunkContent as ChartGenerationJob);
-                                    setStreamingChartJobs(prev => [...prev, chunkContent as ChartGenerationJob]);
-                                } else if (chunkType === 'trace') {
-                                    trace = chunkContent as MessageTrace;
-                                } else if (chunkType === 'status') {
-                                    setStatusMessage(chunkContent);
-                                } else if (chunkType === 'error') {
-                                    console.error('Server error in stream:', chunkContent);
-                                    throw new Error(`Server error: ${chunkContent}`);
-                                } else {
-                                    console.warn(`Unknown chunk type: ${chunkType}`, parsedChunk);
-                                }
-                            } else if (parsedChunk) {
-                                console.warn('Received unexpected chunk format:', parsedChunk);
-                            }
-                        } catch (parseError) {
-                            console.error('Error parsing JSON event:', parseError);
-                            console.error('Raw event that failed to parse:', JSON.stringify(event));
-                            console.error('Event length:', event.length);
-                            console.error('Event preview (first 200 chars):', event.substring(0, 200));
-                            continue;
-                        }
-                    }
-                }
-            } finally {
-                // Always release the reader
-                try {
-                    reader.releaseLock();
-                } catch (lockError) {
-                    console.warn('Error releasing reader lock:', lockError);
-                }
-            }
-
-            if (accumulatedContent) {
-                const finalMessage: ChatMessage = {
-                    role: 'assistant',
-                    content: accumulatedContent,
-                    references: references,
-                    artifacts: artifacts.length ? artifacts : undefined,
-                    chart_jobs: chartJobs.length ? chartJobs : undefined,
-                    trace: trace,
-                };
-                setMessages(prev => {
-                    const newMessages = [...prev, finalMessage];
-                    return newMessages;
-                });
-
-                // Clear streaming state immediately after adding final message
-                setStreamingChunks([]);
-                setStreamingReferences(undefined);
-                setStreamingArtifacts([]);
-                setStreamingChartJobs([]);
-            }
-
-        } catch (error) {
-            console.error('Error during streaming:', error);
-
-            // Enhanced error logging
-            if (error instanceof Error) {
-                console.error('Error details:', {
-                    name: error.name,
-                    message: error.message,
-                    stack: error.stack,
-                    cause: error.cause
-                });
-            }
-
-            // Check for specific error types
-            if (error instanceof TypeError) {
-                if (error.message.includes('input stream') || error.message.includes('stream')) {
-                    console.error('Stream-specific TypeError detected');
-                    toast.error("Connection interrupted. Please try again.");
-                } else if (error.message.includes('fetch')) {
-                    console.error('Fetch-related TypeError detected');
-                    toast.error("Network error: Please check your connection and try again.");
-                } else {
-                    console.error('Generic TypeError detected');
-                    toast.error(`Type error: ${error.message}`);
-                }
-            } else if (error instanceof Error && error.name === 'AbortError') {
-                console.error('Request was aborted');
-                toast.error("Request was cancelled. Please try again.");
-            } else if (error instanceof Error && error.message.includes('Server error:')) {
-                // Server-sent error, don't wrap it
-                toast.error(error.message);
-            } else {
-                // Generic error handling
-                const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
-                toast.error(`An error occurred: ${errorMessage}`);
-            }
-
-            setMessages(prev => prev.slice(0, -1));
-            setCurrentMessage(query);
-            setError(`Streaming error: ${error instanceof Error ? error.message : 'Unknown error'}`);
-        } finally {
-            setIsStreaming(false);
+            setIsStreaming(true);
             setStreamingChunks([]);
             setStreamingReferences(undefined);
             setStreamingArtifacts([]);
             setStreamingChartJobs([]);
-            setStatusMessage('');
-            refetchSubscription();
-        }
-    }, [currentMessage, isStreaming, conversationId, projectId, router, refetchSubscription, mentionSelection, papers, openPaperIds, collapseArtifacts]);
+            setError(null);
+
+            const requestBody: ChatRequestBody = {
+                user_query: query,
+                conversation_id: conversationId,
+                project_id: projectId,
+            };
+            if (submittedMentions.paperIds.length > 0) {
+                requestBody.mentioned_paper_ids = submittedMentions.paperIds;
+            }
+
+            try {
+                const stream = await fetchStreamFromApi(
+                    "/api/message/chat/everything",
+                    {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify(requestBody),
+                    },
+                ).catch((fetchError) => {
+                    console.error("Fetch error details:", {
+                        name: fetchError.name,
+                        message: fetchError.message,
+                        stack: fetchError.stack,
+                        cause: fetchError.cause,
+                    });
+                    throw fetchError;
+                });
+
+                if (!stream) {
+                    throw new Error("No stream received from server");
+                }
+
+                const reader = stream.getReader();
+                const decoder = new TextDecoder();
+                let accumulatedContent = "";
+                let references: Reference | undefined = undefined;
+                const artifacts: ChatArtifact[] = [];
+                const chartJobs: ChartGenerationJob[] = [];
+                let trace: MessageTrace | undefined = undefined;
+                let buffer = "";
+
+                try {
+                    while (true) {
+                        let result;
+                        try {
+                            result = await reader.read();
+                        } catch (readerError) {
+                            console.error("Stream reader error:", {
+                                name:
+                                    readerError instanceof Error
+                                        ? readerError.name
+                                        : "Unknown",
+                                message:
+                                    readerError instanceof Error
+                                        ? readerError.message
+                                        : String(readerError),
+                                stack:
+                                    readerError instanceof Error
+                                        ? readerError.stack
+                                        : "No stack",
+                            });
+                            throw readerError;
+                        }
+
+                        const { done, value } = result;
+
+                        if (done) {
+                            if (buffer.trim()) {
+                                console.warn(
+                                    "Unprocessed buffer at end of stream:",
+                                    buffer,
+                                );
+                            }
+                            break;
+                        }
+
+                        if (!value) {
+                            console.warn("Received empty value from stream");
+                            continue;
+                        }
+
+                        let chunk;
+                        try {
+                            chunk = decoder.decode(value, { stream: true });
+                        } catch (decodeError) {
+                            console.error("Error decoding chunk:", decodeError);
+                            console.error("Raw chunk value:", value);
+                            continue;
+                        }
+
+                        buffer += chunk;
+
+                        const parts = buffer.split(END_DELIMITER);
+                        buffer = parts.pop() || "";
+
+                        for (const event of parts) {
+                            if (!event.trim()) continue;
+
+                            try {
+                                const parsedChunk = JSON.parse(event.trim());
+
+                                if (
+                                    parsedChunk &&
+                                    typeof parsedChunk === "object" &&
+                                    "type" in parsedChunk
+                                ) {
+                                    const chunkType = parsedChunk.type;
+                                    const chunkContent = parsedChunk.content;
+
+                                    if (chunkType === "content") {
+                                        accumulatedContent += chunkContent;
+                                        setStreamingChunks((prev) => [
+                                            ...prev,
+                                            chunkContent,
+                                        ]);
+                                    } else if (chunkType === "reset") {
+                                        // The upstream model connection dropped
+                                        // mid-answer and the server re-sent the
+                                        // request. The partial answer is not
+                                        // resumable, so clear it before the
+                                        // replacement answer streams in. Artifacts,
+                                        // chart jobs and the trace come from the
+                                        // earlier evidence phase and survive it.
+                                        console.warn(
+                                            "Stream restarted; discarding partial answer",
+                                        );
+                                        accumulatedContent = "";
+                                        references = undefined;
+                                        setStreamingChunks([]);
+                                        setStreamingReferences(undefined);
+                                    } else if (chunkType === "references") {
+                                        references = chunkContent;
+                                        setStreamingReferences(chunkContent);
+                                    } else if (chunkType === "artifact") {
+                                        artifacts.push(
+                                            chunkContent as ChatArtifact,
+                                        );
+                                        setStreamingArtifacts((prev) => [
+                                            ...prev,
+                                            chunkContent as ChatArtifact,
+                                        ]);
+                                    } else if (chunkType === "chart_job") {
+                                        // The chart is being built in the
+                                        // background; this is the card to watch it
+                                        // by, and it arrives before the answer text.
+                                        chartJobs.push(
+                                            chunkContent as ChartGenerationJob,
+                                        );
+                                        setStreamingChartJobs((prev) => [
+                                            ...prev,
+                                            chunkContent as ChartGenerationJob,
+                                        ]);
+                                    } else if (chunkType === "trace") {
+                                        trace = chunkContent as MessageTrace;
+                                    } else if (chunkType === "status") {
+                                        setStatusMessage(chunkContent);
+                                    } else if (chunkType === "error") {
+                                        console.error(
+                                            "Server error in stream:",
+                                            chunkContent,
+                                        );
+                                        throw new Error(
+                                            `Server error: ${chunkContent}`,
+                                        );
+                                    } else {
+                                        console.warn(
+                                            `Unknown chunk type: ${chunkType}`,
+                                            parsedChunk,
+                                        );
+                                    }
+                                } else if (parsedChunk) {
+                                    console.warn(
+                                        "Received unexpected chunk format:",
+                                        parsedChunk,
+                                    );
+                                }
+                            } catch (parseError) {
+                                console.error(
+                                    "Error parsing JSON event:",
+                                    parseError,
+                                );
+                                console.error(
+                                    "Raw event that failed to parse:",
+                                    JSON.stringify(event),
+                                );
+                                console.error("Event length:", event.length);
+                                console.error(
+                                    "Event preview (first 200 chars):",
+                                    event.substring(0, 200),
+                                );
+                                continue;
+                            }
+                        }
+                    }
+                } finally {
+                    // Always release the reader
+                    try {
+                        reader.releaseLock();
+                    } catch (lockError) {
+                        console.warn("Error releasing reader lock:", lockError);
+                    }
+                }
+
+                if (accumulatedContent) {
+                    const finalMessage: ChatMessage = {
+                        role: "assistant",
+                        content: accumulatedContent,
+                        references: references,
+                        artifacts: artifacts.length ? artifacts : undefined,
+                        chart_jobs: chartJobs.length ? chartJobs : undefined,
+                        trace: trace,
+                    };
+                    setMessages((prev) => {
+                        const newMessages = [...prev, finalMessage];
+                        return newMessages;
+                    });
+
+                    // Clear streaming state immediately after adding final message
+                    setStreamingChunks([]);
+                    setStreamingReferences(undefined);
+                    setStreamingArtifacts([]);
+                    setStreamingChartJobs([]);
+                }
+            } catch (error) {
+                console.error("Error during streaming:", error);
+
+                // Enhanced error logging
+                if (error instanceof Error) {
+                    console.error("Error details:", {
+                        name: error.name,
+                        message: error.message,
+                        stack: error.stack,
+                        cause: error.cause,
+                    });
+                }
+
+                // Check for specific error types
+                if (error instanceof TypeError) {
+                    if (
+                        error.message.includes("input stream") ||
+                        error.message.includes("stream")
+                    ) {
+                        console.error("Stream-specific TypeError detected");
+                        toast.error(
+                            "Connection interrupted. Please try again.",
+                        );
+                    } else if (error.message.includes("fetch")) {
+                        console.error("Fetch-related TypeError detected");
+                        toast.error(
+                            "Network error: Please check your connection and try again.",
+                        );
+                    } else {
+                        console.error("Generic TypeError detected");
+                        toast.error(`Type error: ${error.message}`);
+                    }
+                } else if (
+                    error instanceof Error &&
+                    error.name === "AbortError"
+                ) {
+                    console.error("Request was aborted");
+                    toast.error("Request was cancelled. Please try again.");
+                } else if (
+                    error instanceof Error &&
+                    error.message.includes("Server error:")
+                ) {
+                    // Server-sent error, don't wrap it
+                    toast.error(error.message);
+                } else {
+                    // Generic error handling
+                    const errorMessage =
+                        error instanceof Error
+                            ? error.message
+                            : "Unknown error occurred";
+                    toast.error(`An error occurred: ${errorMessage}`);
+                }
+
+                setMessages((prev) => prev.slice(0, -1));
+                setCurrentMessage(query);
+                setError(
+                    `Streaming error: ${error instanceof Error ? error.message : "Unknown error"}`,
+                );
+            } finally {
+                setIsStreaming(false);
+                setStreamingChunks([]);
+                setStreamingReferences(undefined);
+                setStreamingArtifacts([]);
+                setStreamingChartJobs([]);
+                setStatusMessage("");
+                refetchSubscription();
+            }
+        },
+        [
+            currentMessage,
+            isStreaming,
+            conversationId,
+            projectId,
+            router,
+            refetchSubscription,
+            mentionSelection,
+            papers,
+            openPaperIds,
+            collapseArtifacts,
+        ],
+    );
 
     const [error, setError] = useState<string | null>(null);
 
@@ -533,7 +691,6 @@ function ProjectConversationPageContent() {
         setError(null);
         handleSubmit();
     }, [handleSubmit]);
-
 
     return (
         <div className="flex min-h-0 w-full flex-1 flex-col p-2">

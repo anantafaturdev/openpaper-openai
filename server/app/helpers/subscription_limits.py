@@ -11,6 +11,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Dict, Optional
 
+from sqlalchemy.orm import Session
+
 from app.database.crud.audio_overview_crud import audio_overview_crud
 from app.database.crud.discover_crud import discover_search_crud
 from app.database.crud.message_crud import message_crud
@@ -22,7 +24,6 @@ from app.database.crud.subscription_crud import subscription_crud
 from app.database.models import SubscriptionPlan, SubscriptionStatus
 from app.database.telemetry import track_event
 from app.schemas.user import CurrentUser
-from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,7 @@ SUBSCRIPTION_LIMITS = {
     SubscriptionPlan.RESEARCHER: {
         PAPER_UPLOAD_KEY: 500,
         KB_SIZE_KEY: 3 * 1024 * 1024,  # 3 GB in KB
-        CHAT_CREDITS_KEY: 150000,
+        CHAT_CREDITS_KEY: 21429,
         AUDIO_OVERVIEWS_KEY: 100,
         PROJECTS_KEY: 100,
         DATA_TABLES_KEY: 50,
@@ -68,7 +69,7 @@ def get_user_subscription_plan(db: Session, user: CurrentUser) -> SubscriptionPl
     subscription = subscription_crud.get_by_user_id(db, user.id)
 
     if not subscription:
-        return SubscriptionPlan.BASIC
+        return SubscriptionPlan.RESEARCHER
 
     # Check if subscription is active and not expired
     if (
@@ -81,8 +82,8 @@ def get_user_subscription_plan(db: Session, user: CurrentUser) -> SubscriptionPl
         ]:
             return SubscriptionPlan(subscription.plan)
 
-    # If subscription is expired or inactive, return BASIC
-    return SubscriptionPlan.BASIC
+    # If subscription is expired or inactive, return RESEARCHER (for self-hosted users)
+    return SubscriptionPlan.RESEARCHER
 
 
 def get_plan_limits(plan: SubscriptionPlan) -> Dict:
@@ -430,11 +431,11 @@ def can_user_auto_sync_zotero(db: Session, user: CurrentUser) -> bool:
     return get_user_subscription_plan(db, user) == SubscriptionPlan.RESEARCHER
 
 
-def get_user_chat_credits_used_this_week(db: Session, user: CurrentUser) -> int:
+def get_user_chat_credits_used_today(db: Session, user: CurrentUser) -> int:
     """
     Get the number of chat credits used by the user today.
     """
-    return message_crud.get_chat_credits_used_this_week(db, current_user=user)
+    return message_crud.get_chat_credits_used_today(db, current_user=user)
 
 
 def get_user_audio_overviews_used_this_month(db: Session, user: CurrentUser) -> int:
@@ -460,7 +461,7 @@ def get_user_usage_info(db: Session, user: CurrentUser) -> Dict:
     total_size_allowed = limits[KB_SIZE_KEY]
 
     chat_credits_allowed = limits[CHAT_CREDITS_KEY]
-    chat_credits_used = get_user_chat_credits_used_this_week(db, user)
+    chat_credits_used = get_user_chat_credits_used_today(db, user)
 
     audio_overviews_allowed = limits[AUDIO_OVERVIEWS_KEY]
     audio_overviews_used_this_month = get_user_audio_overviews_used_this_month(db, user)

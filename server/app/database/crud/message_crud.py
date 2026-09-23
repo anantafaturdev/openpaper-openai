@@ -2,6 +2,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
+from pydantic import BaseModel
+from sqlalchemy import desc, func
+from sqlalchemy.orm import Session
+
 from app.database.crud.base_crud import CRUDBase
 from app.database.crud.projects.project_chart_crud import chart_job_crud
 from app.database.crud.sanitization import sanitize_for_postgres
@@ -13,9 +17,6 @@ from app.database.models import (
     ProjectRole,
 )
 from app.schemas.user import CurrentUser
-from pydantic import BaseModel
-from sqlalchemy import desc, func
-from sqlalchemy.orm import Session
 
 
 class MessageBase(BaseModel):
@@ -84,7 +85,7 @@ class MessageCRUD(CRUDBase[Message, MessageCreate, MessageUpdate]):
         conversation_id: UUID,
         current_user: CurrentUser,
         page: int = 1,
-        page_size: int = 10
+        page_size: int = 10,
     ) -> list[Message]:
         """
         Get messages for a conversation:
@@ -115,7 +116,7 @@ class MessageCRUD(CRUDBase[Message, MessageCreate, MessageUpdate]):
         project_id: UUID,
         current_user: CurrentUser,
         page: int = 1,
-        page_size: int = 10
+        page_size: int = 10,
     ) -> list[Message]:
         """
         Get messages for a project conversation:
@@ -170,7 +171,7 @@ class MessageCRUD(CRUDBase[Message, MessageCreate, MessageUpdate]):
         conversation_id: UUID,
         share_paper_id: str,
         page: int = 1,
-        page_size: int = 10
+        page_size: int = 10,
     ) -> list[Message]:
         """
         Get messages for a shared conversation:
@@ -255,7 +256,7 @@ class MessageCRUD(CRUDBase[Message, MessageCreate, MessageUpdate]):
         *,
         conversation_id: UUID,
         current_user: CurrentUser,
-        gap: int = 10
+        gap: int = 10,
     ) -> None:
         """
         Resequence all messages in a conversation with specified gaps
@@ -268,25 +269,24 @@ class MessageCRUD(CRUDBase[Message, MessageCreate, MessageUpdate]):
             message.sequence = (i + 1) * gap  # type: ignore
         db.commit()
 
-    def get_chat_credits_used_this_week(
+    def get_chat_credits_used_today(
         self, db: Session, *, current_user: CurrentUser
     ) -> int:
         """
-        Get the number of chat credits used by the user this week.
+        Get the number of chat credits used by the user today.
         """
-        # Start from the nearest Monday at 00:00 UTC
-        start_of_week = datetime.now(timezone.utc) - timedelta(
-            days=datetime.now(timezone.utc).weekday()
+        # Start from today at 00:00 UTC
+        start_of_day = datetime.now(timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0
         )
-        start_of_week = start_of_week.replace(hour=0, minute=0, second=0, microsecond=0)
-        end_of_week = start_of_week + timedelta(days=7)
+        end_of_day = start_of_day + timedelta(days=1)
         # We'll define a `chat credit` as being equal to the value of 5 characters processed. To compute, we take the length of the content of each message and divide by 5.
         return (
             db.query(func.sum(func.length(Message.content)) / 5)
             .filter(
                 Message.user_id == current_user.id,
-                Message.created_at >= start_of_week,
-                Message.created_at < end_of_week,
+                Message.created_at >= start_of_day,
+                Message.created_at < end_of_day,
             )
             .scalar()
             or 0

@@ -1,6 +1,12 @@
 "use client";
 
-import { ArrowRight, BookOpen, Library, MessageCircle, UploadCloud } from "lucide-react";
+import {
+    ArrowRight,
+    BookOpen,
+    Library,
+    MessageCircle,
+    UploadCloud,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -36,7 +42,9 @@ export default function ProjectPage() {
 
     const [error, setError] = useState<string | null>(null);
     const [newQuery, setNewQuery] = useState("");
-    const [mentionSelection, setMentionSelection] = useState<MentionSelection>(EMPTY_MENTION_SELECTION);
+    const [mentionSelection, setMentionSelection] = useState<MentionSelection>(
+        EMPTY_MENTION_SELECTION,
+    );
     const [isSubmitting, setIsSubmitting] = useState(false);
     const { subscription } = useSubscription();
 
@@ -46,12 +54,15 @@ export default function ProjectPage() {
     useEffect(() => {
         const CHAT_CREDIT_TOAST_KEY = "chat_credit_limit_toast_shown";
         if (chatDisabled && !sessionStorage.getItem(CHAT_CREDIT_TOAST_KEY)) {
-            toast.error("Nice! You've used your chat credits for the week. Upgrade your plan to continue chatting.", {
-                action: {
-                    label: "Upgrade",
-                    onClick: () => router.push("/pricing"),
+            toast.error(
+                "Nice! You've used your chat credits for the day. Upgrade your plan to continue chatting.",
+                {
+                    action: {
+                        label: "Upgrade",
+                        onClick: () => router.push("/pricing"),
+                    },
                 },
-            });
+            );
             sessionStorage.setItem(CHAT_CREDIT_TOAST_KEY, "true");
         }
     }, [chatDisabled, router]);
@@ -80,11 +91,17 @@ export default function ProjectPage() {
 
         setIsSubmitting(true);
         try {
-            const newConversation = await fetchFromApi(`/api/projects/conversations/${projectId}`, {
-                method: "POST",
-                body: JSON.stringify({ title: "New Conversation" }),
-            });
-            localStorage.setItem(`pending-query-${newConversation.id}`, newQuery);
+            const newConversation = await fetchFromApi(
+                `/api/projects/conversations/${projectId}`,
+                {
+                    method: "POST",
+                    body: JSON.stringify({ title: "New Conversation" }),
+                },
+            );
+            localStorage.setItem(
+                `pending-query-${newConversation.id}`,
+                newQuery,
+            );
             // Carry the @-mention scope (project chat is papers-only) to the new
             // conversation so it's applied to the first message.
             if (mentionSelection.paperIds.length > 0) {
@@ -93,7 +110,9 @@ export default function ProjectPage() {
                     JSON.stringify(mentionSelection.paperIds),
                 );
             }
-            router.push(`/projects/${projectId}/conversations/${newConversation.id}`);
+            router.push(
+                `/projects/${projectId}/conversations/${newConversation.id}`,
+            );
         } catch (err) {
             setError("Failed to create a new conversation. Please try again.");
             console.error(err);
@@ -101,8 +120,11 @@ export default function ProjectPage() {
         }
     };
 
-    const isInitialLoading = isProjectLoading ||
-        ((isPapersLoading || isConversationsLoading) && !papers.length && !conversations.length);
+    const isInitialLoading =
+        isProjectLoading ||
+        ((isPapersLoading || isConversationsLoading) &&
+            !papers.length &&
+            !conversations.length);
 
     if (isInitialLoading) {
         return (
@@ -115,7 +137,11 @@ export default function ProjectPage() {
     }
 
     if (projectError || error) {
-        return <div className="p-4 text-red-500">{projectError?.message || error}</div>;
+        return (
+            <div className="p-4 text-red-500">
+                {projectError?.message || error}
+            </div>
+        );
     }
 
     if (!project) {
@@ -131,8 +157,13 @@ export default function ProjectPage() {
                     <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-blue-100 p-4 dark:bg-blue-900/30">
                         <BookOpen className="h-8 w-8 text-blue-500" />
                     </div>
-                    <h2 className="mb-2 text-2xl font-bold">Get Started with Your Project</h2>
-                    <p className="mb-8 text-muted-foreground">Add research papers to your project, then ask questions and generate insights.</p>
+                    <h2 className="mb-2 text-2xl font-bold">
+                        Get Started with Your Project
+                    </h2>
+                    <p className="mb-8 text-muted-foreground">
+                        Add research papers to your project, then ask questions
+                        and generate insights.
+                    </p>
 
                     {!isViewer && (
                         <div className="mb-8 grid w-full grid-cols-1 gap-4 sm:grid-cols-2">
@@ -142,33 +173,47 @@ export default function ProjectPage() {
                                 className="group flex flex-col items-center justify-center rounded-lg border-2 border-dashed p-6 transition-colors hover:bg-accent"
                             >
                                 <UploadCloud className="mb-3 h-10 w-10 text-muted-foreground transition-colors group-hover:text-blue-500" />
-                                <h3 className="font-semibold transition-colors group-hover:text-blue-600">Upload Papers</h3>
-                                <p className="mt-1 text-sm text-muted-foreground">Upload PDFs from your computer</p>
+                                <h3 className="font-semibold transition-colors group-hover:text-blue-600">
+                                    Upload Papers
+                                </h3>
+                                <p className="mt-1 text-sm text-muted-foreground">
+                                    Upload PDFs from your computer
+                                </p>
                             </button>
                             <button
                                 onClick={() => openAddPapers("library")}
                                 className="group flex flex-col items-center justify-center rounded-lg border-2 border-dashed p-6 transition-colors hover:bg-accent"
                             >
                                 <Library className="mb-3 h-10 w-10 text-muted-foreground transition-colors group-hover:text-blue-500" />
-                                <h3 className="font-semibold transition-colors group-hover:text-blue-600">Add from Library</h3>
-                                <p className="mt-1 text-sm text-muted-foreground">Choose from your existing papers</p>
+                                <h3 className="font-semibold transition-colors group-hover:text-blue-600">
+                                    Add from Library
+                                </h3>
+                                <p className="mt-1 text-sm text-muted-foreground">
+                                    Choose from your existing papers
+                                </p>
                             </button>
                         </div>
                     )}
 
                     <div className="flex items-center gap-3 text-sm text-muted-foreground">
                         <div className="flex items-center gap-1.5">
-                            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-blue-100 text-xs font-medium text-blue-600 dark:bg-blue-900/30">1</span>
+                            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-blue-100 text-xs font-medium text-blue-600 dark:bg-blue-900/30">
+                                1
+                            </span>
                             Add papers
                         </div>
                         <ArrowRight className="h-3 w-3" />
                         <div className="flex items-center gap-1.5">
-                            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-muted text-xs font-medium text-muted-foreground">2</span>
+                            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-muted text-xs font-medium text-muted-foreground">
+                                2
+                            </span>
                             Ask questions
                         </div>
                         <ArrowRight className="h-3 w-3" />
                         <div className="flex items-center gap-1.5">
-                            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-muted text-xs font-medium text-muted-foreground">3</span>
+                            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-muted text-xs font-medium text-muted-foreground">
+                                3
+                            </span>
                             Generate insights
                         </div>
                     </div>
@@ -193,7 +238,9 @@ export default function ProjectPage() {
                                 {project.title}
                             </AnimatedGradientText>
                             {project.description && (
-                                <p className="mx-auto mt-2 max-w-lg text-sm text-muted-foreground">{project.description}</p>
+                                <p className="mx-auto mt-2 max-w-lg text-sm text-muted-foreground">
+                                    {project.description}
+                                </p>
                             )}
                         </div>
                         <MentionInput
@@ -204,14 +251,20 @@ export default function ProjectPage() {
                             papersOnly
                             selection={mentionSelection}
                             onSelectionChange={setMentionSelection}
-                            placeholder={chatDisabled ? "Nice! You have used your chat credits for the week. Upgrade your plan to use more." : "Ask a question about your papers, analyze findings, or explore new ideas..."}
+                            placeholder={
+                                chatDisabled
+                                    ? "Nice! You have used your chat credits for the day. Upgrade your plan to use more."
+                                    : "Ask a question about your papers, analyze findings, or explore new ideas..."
+                            }
                             disabled={chatDisabled || isSubmitting}
                             sendDisabled={!newQuery.trim()}
                             busy={isSubmitting}
                             autoFocus
                         />
                         <p className="mt-3 text-center text-xs text-muted-foreground">
-                            {papers.length} paper{papers.length === 1 ? "" : "s"} in context · pick up past chats from the sidebar
+                            {papers.length} paper
+                            {papers.length === 1 ? "" : "s"} in context · pick
+                            up past chats from the sidebar
                         </p>
                     </>
                 ) : !isViewer ? (
@@ -219,9 +272,19 @@ export default function ProjectPage() {
                         <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-muted p-3">
                             <MessageCircle className="h-6 w-6 text-muted-foreground" />
                         </div>
-                        <h3 className="mb-1 text-sm font-semibold">Ready to Start Conversations</h3>
-                        <p className="text-sm text-muted-foreground">Add papers to your project to begin discussing and analyzing them.</p>
-                        <Button variant="outline" size="sm" className="mt-3" onClick={() => openAddPapers()}>
+                        <h3 className="mb-1 text-sm font-semibold">
+                            Ready to Start Conversations
+                        </h3>
+                        <p className="text-sm text-muted-foreground">
+                            Add papers to your project to begin discussing and
+                            analyzing them.
+                        </p>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            className="mt-3"
+                            onClick={() => openAddPapers()}
+                        >
                             Add papers
                         </Button>
                     </div>
@@ -230,12 +293,17 @@ export default function ProjectPage() {
                         <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-blue-100 p-4 dark:bg-blue-900/30">
                             <MessageCircle className="h-8 w-8 text-blue-400" />
                         </div>
-                        <h3 className="mb-2 text-lg font-medium">{project.title}</h3>
+                        <h3 className="mb-2 text-lg font-medium">
+                            {project.title}
+                        </h3>
                         {project.description && (
-                            <p className="mx-auto mb-3 max-w-md text-sm text-muted-foreground">{project.description}</p>
+                            <p className="mx-auto mb-3 max-w-md text-sm text-muted-foreground">
+                                {project.description}
+                            </p>
                         )}
                         <p className="mx-auto max-w-md text-sm text-muted-foreground">
-                            You have view access — browse papers and pick up chats from the sidebar.
+                            You have view access — browse papers and pick up
+                            chats from the sidebar.
                         </p>
                     </div>
                 )}

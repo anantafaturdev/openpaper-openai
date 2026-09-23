@@ -1,4 +1,4 @@
-"use client"
+"use client";
 
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
@@ -18,10 +18,10 @@ import {
 
 export const UsageLimitCard = ({
     subscription,
-    loading
+    loading,
 }: {
-    subscription: SubscriptionData | null,
-    loading: boolean
+    subscription: SubscriptionData | null;
+    loading: boolean;
 }) => {
     if (loading || !subscription) {
         return (
@@ -41,23 +41,22 @@ export const UsageLimitCard = ({
         total,
         unit = "",
         percentage,
-        formatValue
+        formatValue,
     }: {
-        label: string,
-        used: number,
-        total: number,
-        unit?: string,
-        percentage: number,
-        formatValue?: (value: number) => string
+        label: string;
+        used: number;
+        total: number;
+        unit?: string;
+        percentage: number;
+        formatValue?: (value: number) => string;
     }) => (
         <div className="space-y-2">
             <div className="flex justify-between items-center">
                 <span className="text-sm font-medium">{label}</span>
                 <span className="text-sm text-muted-foreground">
-                    {formatValue ?
-                        `${formatValue(used)} / ${formatValue(total)}` :
-                        formatUsage(used, total, unit)
-                    }
+                    {formatValue
+                        ? `${formatValue(used)} / ${formatValue(total)}`
+                        : formatUsage(used, total, unit)}
                 </span>
             </div>
             <div className="relative">
@@ -73,8 +72,16 @@ export const UsageLimitCard = ({
         <div className="p-4 space-y-4">
             <div className="flex items-center justify-between">
                 <h3 className="text-sm font-semibold">Usage Limits</h3>
-                <Badge variant={subscription.plan === 'researcher' ? "default" : "secondary"}>
-                    {subscription.plan === 'researcher' ? 'Researcher' : 'Basic'}
+                <Badge
+                    variant={
+                        subscription.plan === "researcher"
+                            ? "default"
+                            : "secondary"
+                    }
+                >
+                    {subscription.plan === "researcher"
+                        ? "Researcher"
+                        : "Basic"}
                 </Badge>
             </div>
 
@@ -95,7 +102,7 @@ export const UsageLimitCard = ({
                 />
 
                 <UsageItem
-                    label="Weekly Chat Credits"
+                    label="Daily Chat Credits"
                     used={subscription.usage.chat_credits_used}
                     total={subscription.limits.chat_credits_weekly}
                     percentage={getChatCreditUsagePercentage(subscription)}
@@ -133,10 +140,12 @@ export const UsageLimitCard = ({
             <div className="pt-2 border-t">
                 <Link href="/pricing" className="w-full">
                     <Button size="sm" className="w-full">
-                        {subscription.plan === 'researcher' ? 'Manage' : 'Upgrade'}
+                        {subscription.plan === "researcher"
+                            ? "Manage"
+                            : "Upgrade"}
                     </Button>
                 </Link>
             </div>
         </div>
     );
-}
+};
