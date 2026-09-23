@@ -14,7 +14,7 @@ import CustomCitationLink from "@/components/utils/CustomCitationLink";
 import { ChatMessageActions } from "@/components/ChatMessageActions";
 import { AudioOverview, Reference, PaperItem } from "@/lib/schema";
 import ReferencePaperCards from "@/components/ReferencePaperCards";
-import { PdfHighlighterViewer } from "@/components/PdfHighlighterViewer";
+import { PdfHighlighterViewer } from "@/components/DynamicPdfViewer";
 
 interface RichAudioOverviewProps {
     audioOverview: AudioOverview;
@@ -32,20 +32,27 @@ export const RichAudioOverview = ({
     const [pdfUrl, setPdfUrl] = useState<string | null>(null);
     const [searchTerm, setSearchTerm] = useState<string | null>(null);
     const [isPdfVisible, setIsPdfVisible] = useState(false);
-    const [highlightedInfo, setHighlightedInfo] = useState<{ paperId: string; messageIndex: number } | null>(null);
-    const [activeCitationKey, setActiveCitationKey] = useState<string | null>(null);
+    const [highlightedInfo, setHighlightedInfo] = useState<{
+        paperId: string;
+        messageIndex: number;
+    } | null>(null);
+    const [activeCitationKey, setActiveCitationKey] = useState<string | null>(
+        null,
+    );
     const scrollContainerRef = useRef<HTMLDivElement>(null);
     const isMobile = useIsMobile();
 
     const handleCitationClick = (key: string, messageIndex: number) => {
         const citationIndex = parseInt(key);
-        const citation = audioOverview.citations.find(c => c.index === citationIndex);
+        const citation = audioOverview.citations.find(
+            (c) => c.index === citationIndex,
+        );
 
         if (!citation) return;
 
         // If citation has paper_id, try to open the specific paper's PDF
         if (citation.paper_id && papers) {
-            const paper = papers.find(p => p.id === citation.paper_id);
+            const paper = papers.find((p) => p.id === citation.paper_id);
             if (paper && onOpenPaperExternal) {
                 onOpenPaperExternal(paper, citation.text);
                 setActiveCitationKey(key);
@@ -56,7 +63,10 @@ export const RichAudioOverview = ({
                 setPdfUrl(paper.file_url);
                 setSearchTerm(citation.text);
                 setIsPdfVisible(true);
-                setHighlightedInfo({ paperId: citation.paper_id, messageIndex });
+                setHighlightedInfo({
+                    paperId: citation.paper_id,
+                    messageIndex,
+                });
 
                 // Ensure content is scrollable after PDF viewer opens
                 setTimeout(() => {
@@ -65,7 +75,8 @@ export const RichAudioOverview = ({
                     }
                     // Reset PDF viewer scroll to show toolbar - delay to ensure PDF has loaded
                     setTimeout(() => {
-                        const pdfContainer = document.getElementById('pdf-container');
+                        const pdfContainer =
+                            document.getElementById("pdf-container");
                         if (pdfContainer) {
                             pdfContainer.scrollTop = 0;
                         }
@@ -79,22 +90,29 @@ export const RichAudioOverview = ({
     };
 
     // Convert ReferenceCitation[] to Citation[] format for CustomCitationLink compatibility
-    const convertedCitations = audioOverview.citations.map(c => ({
+    const convertedCitations = audioOverview.citations.map((c) => ({
         key: String(c.index),
         reference: c.text,
-        paper_id: c.paper_id
+        paper_id: c.paper_id,
     }));
 
     // Create a reference object similar to chat messages for compatibility
     const references: Reference = {
-        citations: convertedCitations
+        citations: convertedCitations,
     };
 
     return (
         <div className="flex flex-row w-full h-full overflow-hidden">
-            <div className={`flex flex-col h-full transition-all duration-500 ease-in-out ${isMobile ? (isPdfVisible ? 'hidden' : 'w-full') : (isPdfVisible ? 'w-1/3' : 'w-full')}`}>
-                <div ref={scrollContainerRef} className="rich-audio-overview-scroll flex-1 w-full overflow-y-auto overflow-x-hidden transition-all duration-300 ease-in-out">
-                    <div className={`space-y-4 w-full transition-all duration-300 ease-in-out ${isPdfVisible ? 'p-2' : 'p-6'}`}>
+            <div
+                className={`flex flex-col h-full transition-all duration-500 ease-in-out ${isMobile ? (isPdfVisible ? "hidden" : "w-full") : isPdfVisible ? "w-1/3" : "w-full"}`}
+            >
+                <div
+                    ref={scrollContainerRef}
+                    className="rich-audio-overview-scroll flex-1 w-full overflow-y-auto overflow-x-hidden transition-all duration-300 ease-in-out"
+                >
+                    <div
+                        className={`space-y-4 w-full transition-all duration-300 ease-in-out ${isPdfVisible ? "p-2" : "p-6"}`}
+                    >
                         {/* Header */}
                         <div className="flex items-start justify-between mb-6">
                             <div className="flex-1">
@@ -107,13 +125,21 @@ export const RichAudioOverview = ({
                         {/* Transcript Content */}
                         <div className="relative group prose dark:prose-invert !max-w-full transition-all duration-300 ease-in-out">
                             <Markdown
-                                remarkPlugins={[[remarkMath, { singleDollarTextMath: false }], remarkGfm]}
+                                remarkPlugins={[
+                                    [
+                                        remarkMath,
+                                        { singleDollarTextMath: false },
+                                    ],
+                                    remarkGfm,
+                                ]}
                                 rehypePlugins={[rehypeKatex]}
                                 components={{
                                     p: (props) => (
                                         <CustomCitationLink
                                             {...props}
-                                            handleCitationClick={handleCitationClick}
+                                            handleCitationClick={
+                                                handleCitationClick
+                                            }
                                             messageIndex={0}
                                             citations={convertedCitations}
                                             papers={papers || []}
@@ -122,7 +148,9 @@ export const RichAudioOverview = ({
                                     li: (props) => (
                                         <CustomCitationLink
                                             {...props}
-                                            handleCitationClick={handleCitationClick}
+                                            handleCitationClick={
+                                                handleCitationClick
+                                            }
                                             messageIndex={0}
                                             citations={convertedCitations}
                                             papers={papers || []}
@@ -131,7 +159,9 @@ export const RichAudioOverview = ({
                                     div: (props) => (
                                         <CustomCitationLink
                                             {...props}
-                                            handleCitationClick={handleCitationClick}
+                                            handleCitationClick={
+                                                handleCitationClick
+                                            }
                                             messageIndex={0}
                                             citations={convertedCitations}
                                             papers={papers || []}
@@ -140,7 +170,9 @@ export const RichAudioOverview = ({
                                     td: (props) => (
                                         <CustomCitationLink
                                             {...props}
-                                            handleCitationClick={handleCitationClick}
+                                            handleCitationClick={
+                                                handleCitationClick
+                                            }
                                             messageIndex={0}
                                             citations={convertedCitations}
                                             papers={papers || []}
@@ -153,13 +185,16 @@ export const RichAudioOverview = ({
                             </Markdown>
 
                             {/* References Section */}
-                            {audioOverview.citations && audioOverview.citations.length > 0 ? (
+                            {audioOverview.citations &&
+                            audioOverview.citations.length > 0 ? (
                                 <div>
                                     <div
                                         className="mt-6 pt-4 border-t border-gray-300 dark:border-gray-700 flex items-center justify-between"
                                         id="references-section"
                                     >
-                                        <h4 className="text-sm font-semibold mb-2">References</h4>
+                                        <h4 className="text-sm font-semibold mb-2">
+                                            References
+                                        </h4>
                                         <ChatMessageActions
                                             message={audioOverview.transcript}
                                             references={references}
@@ -172,28 +207,38 @@ export const RichAudioOverview = ({
                                             messageId={audioOverview.id}
                                             messageIndex={0}
                                             highlightedPaper={
-                                                highlightedInfo && highlightedInfo.messageIndex === 0
+                                                highlightedInfo &&
+                                                highlightedInfo.messageIndex ===
+                                                    0
                                                     ? highlightedInfo.paperId
                                                     : null
                                             }
-                                            onHighlightClear={() => setHighlightedInfo(null)}
+                                            onHighlightClear={() =>
+                                                setHighlightedInfo(null)
+                                            }
                                         />
                                     ) : (
                                         <div className="space-y-2">
-                                            {audioOverview.citations.map((citation) => (
-                                                <div
-                                                    key={citation.index}
-                                                    className={`p-3 rounded-lg border text-sm transition-colors ${activeCitationKey === String(citation.index)
-                                                        ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800'
-                                                        : 'bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700'
+                                            {audioOverview.citations.map(
+                                                (citation) => (
+                                                    <div
+                                                        key={citation.index}
+                                                        className={`p-3 rounded-lg border text-sm transition-colors ${
+                                                            activeCitationKey ===
+                                                            String(
+                                                                citation.index,
+                                                            )
+                                                                ? "bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800"
+                                                                : "bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700"
                                                         }`}
-                                                >
-                                                    <span className="font-medium text-blue-600 dark:text-blue-400">
-                                                        [{citation.index}]
-                                                    </span>{' '}
-                                                    {citation.text}
-                                                </div>
-                                            ))}
+                                                    >
+                                                        <span className="font-medium text-blue-600 dark:text-blue-400">
+                                                            [{citation.index}]
+                                                        </span>{" "}
+                                                        {citation.text}
+                                                    </div>
+                                                ),
+                                            )}
                                         </div>
                                     )}
                                 </div>
@@ -210,7 +255,9 @@ export const RichAudioOverview = ({
 
             {/* PDF Viewer Panel */}
             {isPdfVisible && (
-                <div className={`${isMobile ? 'w-full relative' : 'w-2/3 border-l-2'} flex flex-col h-full overflow-hidden animate-in slide-in-from-right-5 duration-500 ease-in-out`}>
+                <div
+                    className={`${isMobile ? "w-full relative" : "w-2/3 border-l-2"} flex flex-col h-full overflow-hidden animate-in slide-in-from-right-5 duration-500 ease-in-out`}
+                >
                     {isMobile && (
                         <Button
                             onClick={() => setIsPdfVisible(false)}
@@ -228,21 +275,21 @@ export const RichAudioOverview = ({
                                 explicitSearchTerm={searchTerm || undefined}
                                 highlights={[]}
                                 activeHighlight={null}
-                                setUserMessageReferences={() => { }}
-                                setSelectedText={() => { }}
-                                setTooltipPosition={() => { }}
+                                setUserMessageReferences={() => {}}
+                                setSelectedText={() => {}}
+                                setTooltipPosition={() => {}}
                                 isAnnotating={false}
-                                setIsAnnotating={() => { }}
-                                setIsHighlightInteraction={() => { }}
+                                setIsAnnotating={() => {}}
+                                setIsHighlightInteraction={() => {}}
                                 isHighlightInteraction={false}
-                                setHighlights={() => { }}
-                                selectedText={''}
+                                setHighlights={() => {}}
+                                selectedText={""}
                                 tooltipPosition={null}
-                                setActiveHighlight={() => { }}
-                                addHighlight={() => { }}
-                                loadHighlights={async () => { }}
-                                removeHighlight={() => { }}
-                                renderAnnotations={() => { }}
+                                setActiveHighlight={() => {}}
+                                addHighlight={() => {}}
+                                loadHighlights={async () => {}}
+                                removeHighlight={() => {}}
+                                renderAnnotations={() => {}}
                                 annotations={[]}
                             />
                         )}

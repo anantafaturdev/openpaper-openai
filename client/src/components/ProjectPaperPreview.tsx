@@ -2,7 +2,7 @@ import { PaperItem } from "@/lib/schema";
 import { Button } from "./ui/button";
 import { toast } from "sonner";
 import { FilePlus2 } from "lucide-react";
-import { PdfHighlighterViewer } from "./PdfHighlighterViewer";
+import { PdfHighlighterViewer } from "./DynamicPdfViewer";
 import { useRouter } from "next/navigation";
 import { fetchFromApi, getProjectPaperFileUrl } from "@/lib/api";
 import { useEffect, useState, useCallback } from "react";
@@ -15,7 +15,11 @@ interface ProjectPaperPreviewProps {
     searchTerm?: string | null;
 }
 
-export function ProjectPaperPreview({ paper, projectId, searchTerm }: ProjectPaperPreviewProps) {
+export function ProjectPaperPreview({
+    paper,
+    projectId,
+    searchTerm,
+}: ProjectPaperPreviewProps) {
     const router = useRouter();
     const [forkedPaper, setForkedPaper] = useState<PaperItem | null>(null);
     const [isCheckingFork, setIsCheckingFork] = useState(true);
@@ -25,12 +29,17 @@ export function ProjectPaperPreview({ paper, projectId, searchTerm }: ProjectPap
             if (!paper.id) return;
             setIsCheckingFork(true);
             try {
-                const response = await fetchFromApi(`/api/projects/papers/forked/${paper.id}`);
+                const response = await fetchFromApi(
+                    `/api/projects/papers/forked/${paper.id}`,
+                );
                 if (response.paper) {
                     setForkedPaper(response.paper);
                 }
             } catch (error) {
-                console.log("Could not check fork status, or paper is not forked.", error);
+                console.log(
+                    "Could not check fork status, or paper is not forked.",
+                    error,
+                );
             } finally {
                 setIsCheckingFork(false);
             }
@@ -69,8 +78,8 @@ export function ProjectPaperPreview({ paper, projectId, searchTerm }: ProjectPap
                 paper_id: paper.id,
             };
 
-            const response = await fetchFromApi('/api/projects/papers/fork', {
-                method: 'POST',
+            const response = await fetchFromApi("/api/projects/papers/fork", {
+                method: "POST",
                 body: JSON.stringify(requestBody),
             });
 
@@ -101,26 +110,55 @@ export function ProjectPaperPreview({ paper, projectId, searchTerm }: ProjectPap
             <div className="h-full flex flex-col">
                 {/* Compact one-line header — the reader tab already shows the title */}
                 <div className="flex items-center gap-2 border-b px-3 py-1.5">
-                    <h3 className="min-w-0 flex-1 truncate text-sm font-medium" title={paper.title}>{paper.title}</h3>
+                    <h3
+                        className="min-w-0 flex-1 truncate text-sm font-medium"
+                        title={paper.title}
+                    >
+                        {paper.title}
+                    </h3>
                     <div className="flex shrink-0 items-center gap-1">
                         <CitePaperButton paper={[paper]} minimalist={true} />
                         {paper.is_owner ? (
-                            <Button variant="outline" size="sm" className="h-7 px-2.5 text-xs" onClick={() => router.push(`/paper/${paper.id}`)}>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-7 px-2.5 text-xs"
+                                onClick={() =>
+                                    router.push(`/paper/${paper.id}`)
+                                }
+                            >
                                 <FilePlus2 className="h-3.5 w-3.5 mr-1.5" />
                                 Open
                             </Button>
                         ) : isCheckingFork ? (
-                            <Button variant="outline" size="sm" className="h-7 px-2.5 text-xs" disabled>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-7 px-2.5 text-xs"
+                                disabled
+                            >
                                 <FilePlus2 className="h-3.5 w-3.5 mr-1.5" />
                                 Checking...
                             </Button>
                         ) : forkedPaper ? (
-                            <Button variant="outline" size="sm" className="h-7 px-2.5 text-xs" onClick={() => router.push(`/paper/${forkedPaper.id}`)}>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-7 px-2.5 text-xs"
+                                onClick={() =>
+                                    router.push(`/paper/${forkedPaper.id}`)
+                                }
+                            >
                                 <FilePlus2 className="h-3.5 w-3.5 mr-1.5" />
                                 Open
                             </Button>
                         ) : (
-                            <Button variant="outline" size="sm" className="h-7 px-2.5 text-xs" onClick={handleDuplicate}>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-7 px-2.5 text-xs"
+                                onClick={handleDuplicate}
+                            >
                                 <FilePlus2 className="h-3.5 w-3.5 mr-1.5" />
                                 Add to My Library
                             </Button>
@@ -132,23 +170,23 @@ export function ProjectPaperPreview({ paper, projectId, searchTerm }: ProjectPap
                         <PdfHighlighterViewer
                             pdfUrl={paper.file_url}
                             explicitSearchTerm={searchTerm || ""}
-                            setUserMessageReferences={() => { }}
+                            setUserMessageReferences={() => {}}
                             highlights={[]}
-                            setHighlights={() => { }}
+                            setHighlights={() => {}}
                             selectedText=""
-                            setSelectedText={() => { }}
+                            setSelectedText={() => {}}
                             tooltipPosition={null}
-                            setTooltipPosition={() => { }}
+                            setTooltipPosition={() => {}}
                             isAnnotating={false}
-                            setIsAnnotating={() => { }}
+                            setIsAnnotating={() => {}}
                             isHighlightInteraction={false}
-                            setIsHighlightInteraction={() => { }}
+                            setIsHighlightInteraction={() => {}}
                             activeHighlight={null}
-                            setActiveHighlight={() => { }}
-                            addHighlight={() => { }}
-                            removeHighlight={() => { }}
-                            loadHighlights={async () => { }}
-                            renderAnnotations={() => { }}
+                            setActiveHighlight={() => {}}
+                            addHighlight={() => {}}
+                            removeHighlight={() => {}}
+                            loadHighlights={async () => {}}
+                            renderAnnotations={() => {}}
                             annotations={[]}
                             onRefreshUrl={refreshPdfUrl}
                         />

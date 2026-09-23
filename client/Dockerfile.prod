@@ -1,0 +1,29 @@
+# Production image for the Next client, used by docker-compose.
+# Builds the Next.js app at image build time so pages are pre-compiled.
+FROM node:24-slim
+
+WORKDIR /app
+
+# Build-time arguments — NEXT_PUBLIC_* vars must be available during `next build`
+ARG NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+ARG NEXT_PUBLIC_POSTHOG_KEY=
+ENV NEXT_PUBLIC_POSTHOG_KEY=$NEXT_PUBLIC_POSTHOG_KEY
+ARG NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com
+ENV NEXT_PUBLIC_POSTHOG_HOST=$NEXT_PUBLIC_POSTHOG_HOST
+
+# Install dependencies (cache layer)
+COPY package.json yarn.lock ./
+RUN yarn install --frozen-lockfile
+
+# Copy source and build
+COPY . .
+RUN yarn build
+
+EXPOSE 3000
+
+# Suppress unhandled Promise rejections from server-side chunks that
+# reference browser APIs (e.g. `window`) at module initialization time.
+# These are harmless — the rejections happen during SSR of server-only
+# modules and do not affect client-side functionality.
+CMD ["node", "--unhandled-rejections=warn", "node_modules/.bin/next", "start"]

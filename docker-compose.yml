@@ -15,193 +15,189 @@ name: openpaper-dev
 # uncontainerized stack uses — there is no second copy to keep in sync. Only the
 # values that must differ inside the container network are overridden below.
 x-jobs-service: &jobs-service
-    build:
-        context: ./jobs
-    env_file: [jobs/.env]
-    environment:
-        # Both halves must agree on broker and vhost or tasks are published to a
-        # queue nobody consumes. The checked-in envs disagree on the trailing slash
-        # (server "/" vs jobs "//"), so both are pinned to the explicit "/" vhost.
-        CELERY_BROKER_URL: pyamqp://guest:guest@rabbitmq:5672//
-        CELERY_RESULT_BACKEND: redis://redis:6379/0
-        # Webhooks land on the server over the compose network, not the host port.
-        WEBHOOK_BASE_URL: http://server:8000
-        LANGFUSE_TRACING_ENVIRONMENT: local-docker
-    volumes:
-        # Only the source dirs are mounted, not ./jobs itself. Mounting the whole
-        # directory would shadow the image's Linux virtualenv at /app/.venv with the
-        # macOS one `uv sync` leaves on the host, and a volume to protect it can't
-        # be shared: all three jobs services start at once and race to initialize
-        # it. Adding a new top-level file under jobs/ needs `scripts/dev rebuild`.
-        - ./jobs/src:/app/src
-        - ./jobs/scripts:/app/scripts
-    depends_on:
-        rabbitmq: { condition: service_healthy }
-        redis: { condition: service_healthy }
-    restart: unless-stopped
+  build:
+    context: ./jobs
+  env_file: [jobs/.env]
+  environment:
+    # Both halves must agree on broker and vhost or tasks are published to a
+    # queue nobody consumes. The checked-in envs disagree on the trailing slash
+    # (server "/" vs jobs "//"), so both are pinned to the explicit "/" vhost.
+    CELERY_BROKER_URL: pyamqp://guest:guest@rabbitmq:5672//
+    CELERY_RESULT_BACKEND: redis://redis:6379/0
+    # Webhooks land on the server over the compose network, not the host port.
+    WEBHOOK_BASE_URL: http://server:8000
+    LANGFUSE_TRACING_ENVIRONMENT: local-docker
+  volumes:
+    # Only the source dirs are mounted, not ./jobs itself. Mounting the whole
+    # directory would shadow the image's Linux virtualenv at /app/.venv with the
+    # macOS one `uv sync` leaves on the host, and a volume to protect it can't
+    # be shared: all three jobs services start at once and race to initialize
+    # it. Adding a new top-level file under jobs/ needs `scripts/dev rebuild`.
+    - ./jobs/src:/app/src
+    - ./jobs/scripts:/app/scripts
+  depends_on:
+    rabbitmq: { condition: service_healthy }
+    redis: { condition: service_healthy }
+  restart: unless-stopped
 
 services:
-    postgres:
-        image: postgres:17
-        environment:
-            POSTGRES_USER: postgres
-            POSTGRES_PASSWORD: postgres
-            POSTGRES_DB: annotated-paper
-        ports:
-            - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
-        volumes:
-            - pgdata:/var/lib/postgresql/data
-            - ./docker/seed:/seed
-        healthcheck:
-            test: ["CMD-SHELL", "pg_isready -U postgres -d annotated-paper"]
-            interval: 3s
-            timeout: 5s
-            retries: 20
-        restart: unless-stopped
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: annotated-paper
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/seed:/seed
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d annotated-paper"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
 
-    rabbitmq:
-        # Pinned to the exact version the uncontainerized stack runs. Newer 4.x
-        # images disallow `transient_nonexcl_queues` by default, which is what
-        # Celery declares — the worker then crash-loops with a 541 INTERNAL_ERROR
-        # on connect. The local op-rabbitmq container predates that change and so
-        # never hit it; a floating tag here would have made this stack diverge from
-        # the one it is supposed to mirror.
-        image: rabbitmq:4.1.2-management
-        ports:
-            - "127.0.0.1:${RABBITMQ_PORT:-5673}:5672"
-            - "127.0.0.1:${RABBITMQ_UI_PORT:-15673}:15672"
-        healthcheck:
-            test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
-            interval: 5s
-            timeout: 10s
-            retries: 20
-        restart: unless-stopped
+  rabbitmq:
+    # Pinned to the exact version the uncontainerized stack runs. Newer 4.x
+    # images disallow `transient_nonexcl_queues` by default, which is what
+    # Celery declares — the worker then crash-loops with a 541 INTERNAL_ERROR
+    # on connect. The local op-rabbitmq container predates that change and so
+    # never hit it; a floating tag here would have made this stack diverge from
+    # the one it is supposed to mirror.
+    image: rabbitmq:4.1.2-management
+    ports:
+      - "127.0.0.1:${RABBITMQ_PORT:-5673}:5672"
+      - "127.0.0.1:${RABBITMQ_UI_PORT:-15673}:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+    restart: unless-stopped
 
-    redis:
-        image: redis:7-alpine
-        ports:
-            - "127.0.0.1:${REDIS_PORT:-6380}:6379"
-        healthcheck:
-            test: ["CMD", "redis-cli", "ping"]
-            interval: 3s
-            timeout: 5s
-            retries: 20
-        restart: unless-stopped
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6380}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
 
-    # One-shot, exactly as prod does it. `server` waits for this to exit 0, so a
-    # failed migration surfaces as a failed startup instead of a half-migrated db.
-    migrate:
-        build:
-            context: ./server
-        command: ["python", "app/scripts/run_migrations.py"]
-        env_file: [server/.env]
-        environment:
-            DATABASE_URL: postgresql://postgres:postgres@postgres:5432/annotated-paper
-        volumes:
-            - ./server:/app
-        depends_on:
-            postgres: { condition: service_healthy }
-        restart: "no"
+  # One-shot, exactly as prod does it. `server` waits for this to exit 0, so a
+  # failed migration surfaces as a failed startup instead of a half-migrated db.
+  migrate:
+    build:
+      context: ./server
+    command: ["python", "app/scripts/run_migrations.py"]
+    env_file: [server/.env]
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/annotated-paper
+    volumes:
+      - ./server:/app
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: "no"
 
-    server:
-        build:
-            context: ./server
-        # python -m app.main runs uvicorn directly (readable single-process logs),
-        # where prod runs gunicorn.
-        command: ["python3", "-m", "app.main"]
-        env_file: [server/.env]
-        environment:
-            DATABASE_URL: postgresql://postgres:postgres@postgres:5432/annotated-paper
-            CELERY_BROKER_URL: pyamqp://guest:guest@rabbitmq:5672//
-            # No CELERY_RESULT_BACKEND here on purpose. server/.env leaves it unset
-            # and the server image has no redis package, so setting it makes every
-            # task submission fail with "No module named 'redis'". Only the jobs
-            # services, which do ship redis, get a result backend.
-            CELERY_API_URL: http://jobs-api:8001
-            # Read by the SERVER, not just by jobs: the server builds the callback URL
-            # it hands to each Celery task, and the worker is what dials it. So this
-            # has to be the compose-network address, never the host-published port —
-            # localhost inside the worker container is the worker itself.
-            WEBHOOK_BASE_URL: http://server:8000
-            # CORS allows exactly one origin, so this must be the *host-published*
-            # client port — it is compared against the browser's Origin header.
-            CLIENT_DOMAIN: https://openpaper.anantafatur.dev
-            API_DOMAIN: https://api-openpaper.anantafatur.dev
-            SESSION_COOKIE_DOMAIN: anantafatur.dev
-            # Browser OAuth against these ports only works if the redirect URIs are
-            # registered with the provider. Use `scripts/dev session` instead.
-            GOOGLE_REDIRECT_URI: https://api-openpaper.anantafatur.dev/api/auth/google/callback
-            ZOTERO_REDIRECT_URI: https://api-openpaper.anantafatur.dev/api/auth/zotero/callback
-            LANGFUSE_TRACING_ENVIRONMENT: local-docker
-            DEBUG: "True"
-            # Autoreload. server/ is bind-mounted, so edits are live in the container
-            # immediately — but the uvicorn process keeps whatever it imported at
-            # start. Without this, anything exercised through the HTTP API runs stale
-            # code until `scripts/dev restart server`, while `scripts/dev exec` spawns
-            # a fresh process and looks perfectly fine. That asymmetry is a
-            # verification trap, not a convenience problem: an agent can watch tests
-            # pass against code the running app is not serving.
-            #
-            # It works over the bind mount only because watchfiles is not installed,
-            # so uvicorn falls back to StatReload and polls mtimes. inotify events do
-            # not cross a macOS bind mount, so the faster watcher would see nothing.
-            UVICORN_RELOAD: "True"
-        ports:
-            - "127.0.0.1:${SERVER_PORT:-8100}:8000"
-        volumes:
-            - ./server:/app
-        healthcheck:
-            test:
-                [
-                    "CMD-SHELL",
-                    'python3 -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen(''http://localhost:8000/docs'').status==200 else 1)"',
-                ]
-            interval: 5s
-            timeout: 10s
-            retries: 30
-            start_period: 20s
-        depends_on:
-            postgres: { condition: service_healthy }
-            migrate: { condition: service_completed_successfully }
-        restart: unless-stopped
+  server:
+    build:
+      context: ./server
+    # python -m app.main runs uvicorn directly (readable single-process logs),
+    # where prod runs gunicorn.
+    command: ["python3", "-m", "app.main"]
+    env_file: [server/.env]
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/annotated-paper
+      CELERY_BROKER_URL: pyamqp://guest:guest@rabbitmq:5672//
+      # No CELERY_RESULT_BACKEND here on purpose. server/.env leaves it unset
+      # and the server image has no redis package, so setting it makes every
+      # task submission fail with "No module named 'redis'". Only the jobs
+      # services, which do ship redis, get a result backend.
+      CELERY_API_URL: http://jobs-api:8001
+      # Read by the SERVER, not just by jobs: the server builds the callback URL
+      # it hands to each Celery task, and the worker is what dials it. So this
+      # has to be the compose-network address, never the host-published port —
+      # localhost inside the worker container is the worker itself.
+      WEBHOOK_BASE_URL: http://server:8000
+      # CORS allows exactly one origin, so this must be the *host-published*
+      # client port — it is compared against the browser's Origin header.
+      CLIENT_DOMAIN: https://openpaper.anantafatur.dev
+      API_DOMAIN: https://api-openpaper.anantafatur.dev
+      SESSION_COOKIE_DOMAIN: anantafatur.dev
+      # Browser OAuth against these ports only works if the redirect URIs are
+      # registered with the provider. Use `scripts/dev session` instead.
+      GOOGLE_REDIRECT_URI: https://api-openpaper.anantafatur.dev/api/auth/google/callback
+      ZOTERO_REDIRECT_URI: https://api-openpaper.anantafatur.dev/api/auth/zotero/callback
+      LANGFUSE_TRACING_ENVIRONMENT: local-docker
+      DEBUG: "True"
+      # Autoreload. server/ is bind-mounted, so edits are live in the container
+      # immediately — but the uvicorn process keeps whatever it imported at
+      # start. Without this, anything exercised through the HTTP API runs stale
+      # code until `scripts/dev restart server`, while `scripts/dev exec` spawns
+      # a fresh process and looks perfectly fine. That asymmetry is a
+      # verification trap, not a convenience problem: an agent can watch tests
+      # pass against code the running app is not serving.
+      #
+      # It works over the bind mount only because watchfiles is not installed,
+      # so uvicorn falls back to StatReload and polls mtimes. inotify events do
+      # not cross a macOS bind mount, so the faster watcher would see nothing.
+      UVICORN_RELOAD: "True"
+    ports:
+      - "127.0.0.1:${SERVER_PORT:-8100}:8000"
+    volumes:
+      - ./server:/app
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'python3 -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen(''http://localhost:8000/docs'').status==200 else 1)"',
+        ]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 20s
+    depends_on:
+      postgres: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    restart: unless-stopped
 
-    jobs-api:
-        <<: *jobs-service
-        command: ["./scripts/start_api.sh"]
-        ports:
-            - "127.0.0.1:${JOBS_PORT:-8101}:8001"
+  jobs-api:
+    <<: *jobs-service
+    command: ["./scripts/start_api.sh"]
+    ports:
+      - "127.0.0.1:${JOBS_PORT:-8101}:8001"
 
-    jobs-worker:
-        <<: *jobs-service
-        command: ["./scripts/start_worker.sh"]
-        # The image's HEALTHCHECK curls the jobs API port, which only jobs-api
-        # serves; left on, the worker and beat would report permanently unhealthy.
-        healthcheck:
-            disable: true
+  jobs-worker:
+    <<: *jobs-service
+    command: ["./scripts/start_worker.sh"]
+    # The image's HEALTHCHECK curls the jobs API port, which only jobs-api
+    # serves; left on, the worker and beat would report permanently unhealthy.
+    healthcheck:
+      disable: true
 
-    jobs-beat:
-        <<: *jobs-service
-        command: ["./scripts/start_beat.sh"]
-        healthcheck:
-            disable: true
+  jobs-beat:
+    <<: *jobs-service
+    command: ["./scripts/start_beat.sh"]
+    healthcheck:
+      disable: true
 
-    client:
-        build:
-            context: ./client
-            dockerfile: Dockerfile.dev
-        command: ["yarn", "dev", "--hostname", "0.0.0.0", "--port", "3000"]
-        env_file: [client/.env.local]
-        environment:
-            WATCHPACK_POLLING: "true"
-        ports:
-            - "127.0.0.1:${CLIENT_PORT:-3100}:3000"
-        volumes:
-            - ./client:/app
-            - /app/node_modules
-            - /app/.next
-        depends_on:
-            server: { condition: service_started }
-        restart: unless-stopped
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile.prod
+      args:
+        NEXT_PUBLIC_API_URL: https://api-openpaper.anantafatur.dev
+        NEXT_PUBLIC_POSTHOG_KEY: phc_i84JqfidoQncsSmusoeZF9oshYHV2SebGZkKMVtF8AG
+        NEXT_PUBLIC_POSTHOG_HOST: https://us.i.posthog.com
+    ports:
+      - "127.0.0.1:${CLIENT_PORT:-3100}:3000"
+    depends_on:
+      server: { condition: service_started }
+    restart: unless-stopped
 
 volumes:
-    pgdata:
+  pgdata:

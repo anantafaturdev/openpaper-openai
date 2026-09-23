@@ -52,7 +52,7 @@ import Link from "next/link";
 import { TopicBubbles } from "@/components/TopicBubbles";
 import { AnimatedGradientText } from "@/components/magicui/animated-gradient-text";
 import { ChatHistorySkeleton } from "@/components/ChatHistorySkeleton";
-import { PdfHighlighterViewer } from "@/components/PdfHighlighterViewer";
+import { PdfHighlighterViewer } from "@/components/DynamicPdfViewer";
 
 /** A turn's own artifact cards, minus any chart its job card already draws.
  *
