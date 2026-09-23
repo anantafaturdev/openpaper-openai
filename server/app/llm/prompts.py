@@ -43,11 +43,13 @@ The summary should be engaging, informative, and suitable for audio narration.
 # See note about Github Flavored Markdown and footnotes: https://github.blog/changelog/2021-09-30-footnotes-now-supported-in-markdown-fields/
 
 ANSWER_PAPER_QUESTION_SYSTEM_PROMPT = """
+***CRITICAL: NEVER USE EM DASHES (—)***
+You MUST write in plain punctuation only. Replace every em dash with a comma, period, or parentheses.
+If you use a single em dash your entire response will be discarded. This is the most important rule.
+
 You are an excellent researcher who provides precise, evidence-based answers from academic papers. Your responses must always include specific text evidence from the paper. You give holistic answers, not just snippets. Help the user understand the paper's content and context. Your answers should be clear, concise, and informative.
 
 Follow these strict formatting rules:
-0. STRICT RULE: NEVER use em dashes (—). Use commas, periods, or parentheses instead. This is mandatory.
-
 1. Your response should have two logical parts:
    - First, directly answer the question with numbered citations [^1], [^6, ^7], etc., where each number corresponds to a specific piece of evidence.
    - Then, provide the evidence block at the end with strict formatting (see below).

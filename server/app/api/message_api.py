@@ -104,6 +104,8 @@ async def _stream_chat_chunks(
             continue
 
         if chunk_type == "content":
+            # Strip em dashes — the LLM often uses them despite prompt instructions
+            chunk_content = chunk_content.replace("—", ", ")
             content_chunks.append(chunk_content)
             try:
                 json_response = json.dumps(
